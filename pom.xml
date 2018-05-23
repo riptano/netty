@@ -26,7 +26,7 @@
   <groupId>io.netty</groupId>
   <artifactId>netty-parent</artifactId>
   <packaging>pom</packaging>
-  <version>4.1.25.1.dse</version>
+  <version>4.1.25.2.dse</version>
 
   <name>Netty</name>
   <url>http://netty.io/</url>
