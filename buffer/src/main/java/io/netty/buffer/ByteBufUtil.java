@@ -448,8 +448,9 @@ public final class ByteBufUtil {
             if (buf instanceof AbstractByteBuf) {
                 AbstractByteBuf byteBuf = (AbstractByteBuf) buf;
                 byteBuf.ensureWritable(utf8MaxBytes(seq));
-                int written = writeUtf8(byteBuf, byteBuf.writerIndex, seq, seq.length());
-                byteBuf.writerIndex += written;
+                int writerIndex = byteBuf.writerIndex();
+                int written = writeUtf8(byteBuf, writerIndex, seq, seq.length());
+                byteBuf.writerIndex(writerIndex + written);
                 return written;
             } else if (buf instanceof WrappedByteBuf) {
                 // Unwrap as the wrapped buffer may be an AbstractByteBuf and so we can use fast-path.
