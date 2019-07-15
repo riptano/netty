@@ -11,12 +11,12 @@ build:
       echo "OS VERSION ===== $OS_VERSION"
       if [ "$OS_VERSION" = "osx/high-sierra" ]; then
          mvn -B clean -DskipTests
-         mvn -B -pl transport-native-unix-common,transport-native-kqueue -Partifactory deploy -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+         mvn -B -pl transport-native-unix-common,transport-native-kqueue -Partifactory deploy -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.sjc.dsinternal.org/artifactory/datastax-releases-local"
       else
          export DEBIAN_FRONTEND=noninteractive
          export MAVEN_HOME=/home/jenkins/.mvn/apache-maven-3.2.5
          export PATH=$MAVEN_HOME/bin:$PATH
          sudo apt-get update
          sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
-         mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+         mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.sjc.dsinternal.org/artifactory/datastax-releases-local"
       fi
