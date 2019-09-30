@@ -289,7 +289,7 @@
     <skipOsgiTestsuite>false</skipOsgiTestsuite>
     <skipAutobahnTestsuite>false</skipAutobahnTestsuite>
     <skipHttp2Testsuite>false</skipHttp2Testsuite>
-    <skipJapicmp>false</skipJapicmp>
+    <skipJapicmp>true</skipJapicmp>
   </properties>
 
   <modules>
@@ -788,6 +788,11 @@
             <ignore>java.net.SocketOption</ignore> 
             <ignore>java.net.StandardSocketOptions</ignore> 
             <ignore>java.nio.channels.NetworkChannel</ignore>
+
+            <!-- Used for aio -->
+            <ignore>java.nio.channels.AsynchronousFileChannel</ignore>
+            <ignore>java.nio.channels.CompletionHandler</ignore>
+            <ignore>java.util.concurrent.CompletableFuture</ignore>
 
             <!-- Self-signed certificate generation -->
             <ignore>sun.security.x509.AlgorithmId</ignore>

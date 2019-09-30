@@ -59,7 +59,7 @@ public class PoolArenaTest {
             long address = PlatformDependent.directBufferAddress(bb);
 
             Assert.assertEquals(0, (offset + address) & (alignment - 1));
-            PlatformDependent.freeDirectBuffer(bb);
+            PlatformDependent.freeDirectWithCleaner(bb);
         }
     }
 

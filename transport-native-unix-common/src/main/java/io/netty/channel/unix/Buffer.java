@@ -30,7 +30,7 @@ public final class Buffer {
      * Free the direct {@link ByteBuffer}.
      */
     public static void free(ByteBuffer buffer) {
-        PlatformDependent.freeDirectBuffer(buffer);
+        PlatformDependent.freeDirectWithCleaner(buffer);
     }
 
     /**

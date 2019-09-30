@@ -531,6 +531,7 @@ public class LibAIOTest {
         }
     }
 
+    @SuppressForbidden(reason = "libaio")
     static void freeAlignedByteBuffer(ByteBuffer buffer) {
         PlatformDependent.freeDirectNoCleaner((ByteBuffer) ((DirectBuffer) buffer).attachment());
     }
