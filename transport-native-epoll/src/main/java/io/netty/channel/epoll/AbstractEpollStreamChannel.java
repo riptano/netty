@@ -54,6 +54,7 @@ import static io.netty.channel.internal.ChannelUtils.MAX_BYTES_PER_GATHERING_WRI
 import static io.netty.channel.internal.ChannelUtils.WRITE_STATUS_SNDBUF_FULL;
 import static io.netty.channel.unix.FileDescriptor.pipe;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
+import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 
 public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel implements DuplexChannel {
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
@@ -99,19 +100,19 @@ public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel im
     }
 
     AbstractEpollStreamChannel(Channel parent, LinuxSocket fd) {
-        super(parent, fd, Native.EPOLLIN, true);
+        super(parent, fd, true);
         // Add EPOLLRDHUP so we are notified once the remote peer close the connection.
         flags |= Native.EPOLLRDHUP;
     }
 
     AbstractEpollStreamChannel(Channel parent, LinuxSocket fd, SocketAddress remote) {
-        super(parent, fd, Native.EPOLLIN, remote);
+        super(parent, fd, remote);
         // Add EPOLLRDHUP so we are notified once the remote peer close the connection.
         flags |= Native.EPOLLRDHUP;
     }
 
     protected AbstractEpollStreamChannel(LinuxSocket fd, boolean active) {
-        super(null, fd, Native.EPOLLIN, active);
+        super(null, fd, active);
         // Add EPOLLRDHUP so we are notified once the remote peer close the connection.
         flags |= Native.EPOLLRDHUP;
     }
@@ -163,9 +164,7 @@ public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel im
         if (ch.eventLoop() != eventLoop()) {
             throw new IllegalArgumentException("EventLoops are not the same.");
         }
-        if (len < 0) {
-            throw new IllegalArgumentException("len: " + len + " (expected: >= 0)");
-        }
+        checkPositiveOrZero(len, "len");
         if (ch.config().getEpollMode() != EpollMode.LEVEL_TRIGGERED
                 || config().getEpollMode() != EpollMode.LEVEL_TRIGGERED) {
             throw new IllegalStateException("spliceTo() supported only when using " + EpollMode.LEVEL_TRIGGERED);
@@ -214,12 +213,8 @@ public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel im
      */
     public final ChannelFuture spliceTo(final FileDescriptor ch, final int offset, final int len,
                                         final ChannelPromise promise) {
-        if (len < 0) {
-            throw new IllegalArgumentException("len: " + len + " (expected: >= 0)");
-        }
-        if (offset < 0) {
-            throw new IllegalArgumentException("offset must be >= 0 but was " + offset);
-        }
+        checkPositiveOrZero(len, "len");
+        checkPositiveOrZero(offset, "offser");
         if (config().getEpollMode() != EpollMode.LEVEL_TRIGGERED) {
             throw new IllegalStateException("spliceTo() supported only when using " + EpollMode.LEVEL_TRIGGERED);
         }
@@ -372,13 +367,13 @@ public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel im
      * </ul>
      */
     private int writeDefaultFileRegion(ChannelOutboundBuffer in, DefaultFileRegion region) throws Exception {
+        final long offset = region.transferred();
         final long regionCount = region.count();
-        if (region.transferred() >= regionCount) {
+        if (offset >= regionCount) {
             in.remove();
             return 0;
         }
 
-        final long offset = region.transferred();
         final long flushedAmount = socket.sendFile(region, region.position(), offset, regionCount - offset);
         if (flushedAmount > 0) {
             in.progress(flushedAmount);
@@ -386,6 +381,8 @@ public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel im
                 in.remove();
             }
             return 1;
+        } else if (flushedAmount == 0) {
+            validateFileRegion(region, offset);
         }
         return WRITE_STATUS_SNDBUF_FULL;
     }
@@ -513,22 +510,13 @@ public abstract class AbstractEpollStreamChannel extends AbstractEpollChannel im
      */
     private int doWriteMultiple(ChannelOutboundBuffer in) throws Exception {
         final long maxBytesPerGatheringWrite = config().getMaxBytesPerGatheringWrite();
-        if (PlatformDependent.hasUnsafe()) {
-            IovArray array = ((EpollEventLoop) eventLoop()).cleanArray();
-            array.maxBytes(maxBytesPerGatheringWrite);
-            in.forEachFlushedMessage(array);
+        IovArray array = ((EpollEventLoop) eventLoop()).cleanIovArray();
+        array.maxBytes(maxBytesPerGatheringWrite);
+        in.forEachFlushedMessage(array);
 
-            if (array.count() >= 1) {
-                // TODO: Handle the case where cnt == 1 specially.
-                return writeBytesMultiple(in, array);
-            }
-        } else {
-            ByteBuffer[] buffers = in.nioBuffers();
-            int cnt = in.nioBufferCount();
-            if (cnt >= 1) {
-                // TODO: Handle the case where cnt == 1 specially.
-                return writeBytesMultiple(in, buffers, cnt, in.nioBufferSize(), maxBytesPerGatheringWrite);
-            }
+        if (array.count() >= 1) {
+            // TODO: Handle the case where cnt == 1 specially.
+            return writeBytesMultiple(in, array);
         }
         // cnt == 0, which means the outbound buffer contained empty buffers only.
         in.removeBytes(0);

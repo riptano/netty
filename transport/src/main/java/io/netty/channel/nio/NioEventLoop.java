@@ -33,8 +33,9 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.channels.CancelledKeyException;
 import java.nio.channels.SelectableChannel;
-import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.channels.SelectionKey;
+
 import java.nio.channels.spi.SelectorProvider;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
@@ -43,7 +44,6 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -59,7 +59,7 @@ public class NioEventLoop extends SingleThreadEventLoop {
 
     private static final int CLEANUP_INTERVAL = 256; // XXX Hard-coded value, but won't need customization.
 
-    private static final boolean DISABLE_KEYSET_OPTIMIZATION =
+    private static final boolean DISABLE_KEY_SET_OPTIMIZATION =
             SystemPropertyUtil.getBoolean("io.netty.noKeySetOptimization", false);
 
     private static final int MIN_PREMATURE_SELECTOR_RETURNS = 3;
@@ -71,12 +71,6 @@ public class NioEventLoop extends SingleThreadEventLoop {
             return selectNow();
         }
     };
-    private final Callable<Integer> pendingTasksCallable = new Callable<Integer>() {
-        @Override
-        public Integer call() throws Exception {
-            return NioEventLoop.super.pendingTasks();
-        }
-    };
 
     // Workaround for JDK NIO bug.
     //
@@ -85,8 +79,8 @@ public class NioEventLoop extends SingleThreadEventLoop {
     // - https://github.com/netty/netty/issues/203
     static {
         final String key = "sun.nio.ch.bugLevel";
-        final String buglevel = SystemPropertyUtil.get(key);
-        if (buglevel == null) {
+        final String bugLevel = SystemPropertyUtil.get(key);
+        if (bugLevel == null) {
             try {
                 AccessController.doPrivileged(new PrivilegedAction<Void>() {
                     @Override
@@ -108,12 +102,10 @@ public class NioEventLoop extends SingleThreadEventLoop {
         SELECTOR_AUTO_REBUILD_THRESHOLD = selectorAutoRebuildThreshold;
 
         if (logger.isDebugEnabled()) {
-            logger.debug("-Dio.netty.noKeySetOptimization: {}", DISABLE_KEYSET_OPTIMIZATION);
+            logger.debug("-Dio.netty.noKeySetOptimization: {}", DISABLE_KEY_SET_OPTIMIZATION);
             logger.debug("-Dio.netty.selectorAutoRebuildThreshold: {}", SELECTOR_AUTO_REBUILD_THRESHOLD);
         }
     }
-
-    static final long MAX_SCHEDULED_DAYS = 365 * 3;
 
     /**
      * The NIO {@link Selector}.
@@ -177,11 +169,9 @@ public class NioEventLoop extends SingleThreadEventLoop {
             throw new ChannelException("failed to open a new selector", e);
         }
 
-        if (DISABLE_KEYSET_OPTIMIZATION) {
+        if (DISABLE_KEY_SET_OPTIMIZATION) {
             return new SelectorTuple(unwrappedSelector);
         }
-
-        final SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
 
         Object maybeSelectorImplClass = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
@@ -198,8 +188,8 @@ public class NioEventLoop extends SingleThreadEventLoop {
         });
 
         if (!(maybeSelectorImplClass instanceof Class) ||
-                // ensure the current selector implementation is what we can instrument.
-                !((Class<?>) maybeSelectorImplClass).isAssignableFrom(unwrappedSelector.getClass())) {
+            // ensure the current selector implementation is what we can instrument.
+            !((Class<?>) maybeSelectorImplClass).isAssignableFrom(unwrappedSelector.getClass())) {
             if (maybeSelectorImplClass instanceof Throwable) {
                 Throwable t = (Throwable) maybeSelectorImplClass;
                 logger.trace("failed to instrument a special java.util.Set into: {}", unwrappedSelector, t);
@@ -208,6 +198,7 @@ public class NioEventLoop extends SingleThreadEventLoop {
         }
 
         final Class<?> selectorImplClass = (Class<?>) maybeSelectorImplClass;
+        final SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
 
         Object maybeException = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
@@ -215,6 +206,23 @@ public class NioEventLoop extends SingleThreadEventLoop {
                 try {
                     Field selectedKeysField = selectorImplClass.getDeclaredField("selectedKeys");
                     Field publicSelectedKeysField = selectorImplClass.getDeclaredField("publicSelectedKeys");
+
+                    if (PlatformDependent.javaVersion() >= 9 && PlatformDependent.hasUnsafe()) {
+                        // Let us try to use sun.misc.Unsafe to replace the SelectionKeySet.
+                        // This allows us to also do this in Java9+ without any extra flags.
+                        long selectedKeysFieldOffset = PlatformDependent.objectFieldOffset(selectedKeysField);
+                        long publicSelectedKeysFieldOffset =
+                                PlatformDependent.objectFieldOffset(publicSelectedKeysField);
+
+                        if (selectedKeysFieldOffset != -1 && publicSelectedKeysFieldOffset != -1) {
+                            PlatformDependent.putObject(
+                                    unwrappedSelector, selectedKeysFieldOffset, selectedKeySet);
+                            PlatformDependent.putObject(
+                                    unwrappedSelector, publicSelectedKeysFieldOffset, selectedKeySet);
+                            return null;
+                        }
+                        // We could not retrieve the offset, lets try reflection as last-resort.
+                    }
 
                     Throwable cause = ReflectionUtil.trySetAccessible(selectedKeysField, true);
                     if (cause != null) {
@@ -262,18 +270,6 @@ public class NioEventLoop extends SingleThreadEventLoop {
                                                     : PlatformDependent.<Runnable>newMpscQueue(maxPendingTasks);
     }
 
-    @Override
-    public int pendingTasks() {
-        // As we use a MpscQueue we need to ensure pendingTasks() is only executed from within the EventLoop as
-        // otherwise we may see unexpected behavior (as size() is only allowed to be called by a single consumer).
-        // See https://github.com/netty/netty/issues/5297
-        if (inEventLoop()) {
-            return super.pendingTasks();
-        } else {
-            return submit(pendingTasksCallable).syncUninterruptibly().getNow();
-        }
-    }
-
     /**
      * Registers an arbitrary {@link SelectableChannel}, not necessarily created by Netty, to the {@link Selector}
      * of this event loop.  Once the specified {@link SelectableChannel} is registered, the specified {@code task} will
@@ -298,8 +294,28 @@ public class NioEventLoop extends SingleThreadEventLoop {
             throw new IllegalStateException("event loop shut down");
         }
 
+        if (inEventLoop()) {
+            register0(ch, interestOps, task);
+        } else {
+            try {
+                // Offload to the EventLoop as otherwise java.nio.channels.spi.AbstractSelectableChannel.register
+                // may block for a long time while trying to obtain an internal lock that may be hold while selecting.
+                submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        register0(ch, interestOps, task);
+                    }
+                }).sync();
+            } catch (InterruptedException ignore) {
+                // Even if interrupted we did schedule it so just mark the Thread as interrupted.
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private void register0(SelectableChannel ch, int interestOps, NioTask<?> task) {
         try {
-            ch.register(selector, interestOps, task);
+            ch.register(unwrappedSelector, interestOps, task);
         } catch (Exception e) {
             throw new EventLoopException("failed to register a channel", e);
         }
@@ -397,16 +413,23 @@ public class NioEventLoop extends SingleThreadEventLoop {
             }
         }
 
-        logger.info("Migrated " + nChannels + " channel(s) to the new Selector.");
+        if (logger.isInfoEnabled()) {
+            logger.info("Migrated " + nChannels + " channel(s) to the new Selector.");
+        }
     }
 
     @Override
     protected void run() {
         for (;;) {
             try {
-                switch (selectStrategy.calculateStrategy(selectNowSupplier, hasTasks())) {
+                try {
+                    switch (selectStrategy.calculateStrategy(selectNowSupplier, hasTasks())) {
                     case SelectStrategy.CONTINUE:
                         continue;
+
+                    case SelectStrategy.BUSY_WAIT:
+                        // fall-through to SELECT since the busy-wait is not supported with NIO
+
                     case SelectStrategy.SELECT:
                         select(wakenUp.getAndSet(false));
 
@@ -443,6 +466,13 @@ public class NioEventLoop extends SingleThreadEventLoop {
                         }
                         // fall through
                     default:
+                    }
+                } catch (IOException e) {
+                    // If we receive an IOException here its because the Selector is messed up. Let's rebuild
+                    // the selector and retry. https://github.com/netty/netty/issues/8566
+                    rebuildSelector0();
+                    handleLoopException(e);
+                    continue;
                 }
 
                 cancelledKeys = 0;
@@ -784,17 +814,9 @@ public class NioEventLoop extends SingleThreadEventLoop {
                     selectCnt = 1;
                 } else if (SELECTOR_AUTO_REBUILD_THRESHOLD > 0 &&
                         selectCnt >= SELECTOR_AUTO_REBUILD_THRESHOLD) {
-                    // The selector returned prematurely many times in a row.
-                    // Rebuild the selector to work around the problem.
-                    logger.warn(
-                            "Selector.select() returned prematurely {} times in a row; rebuilding Selector {}.",
-                            selectCnt, selector);
-
-                    rebuildSelector();
-                    selector = this.selector;
-
-                    // Select again to populate selectedKeys.
-                    selector.selectNow();
+                    // The code exists in an extra method to ensure the method is not too big to inline as this
+                    // branch is not very likely to get hit very frequently.
+                    selector = selectRebuildSelector(selectCnt);
                     selectCnt = 1;
                     break;
                 }
@@ -817,20 +839,27 @@ public class NioEventLoop extends SingleThreadEventLoop {
         }
     }
 
+    private Selector selectRebuildSelector(int selectCnt) throws IOException {
+        // The selector returned prematurely many times in a row.
+        // Rebuild the selector to work around the problem.
+        logger.warn(
+                "Selector.select() returned prematurely {} times in a row; rebuilding Selector {}.",
+                selectCnt, selector);
+
+        rebuildSelector();
+        Selector selector = this.selector;
+
+        // Select again to populate selectedKeys.
+        selector.selectNow();
+        return selector;
+    }
+
     private void selectAgain() {
         needsToSelectAgain = false;
         try {
             selector.selectNow();
         } catch (Throwable t) {
             logger.warn("Failed to update SelectionKeys.", t);
-        }
-    }
-
-    @Override
-    protected void validateScheduled(long amount, TimeUnit unit) {
-        long days = unit.toDays(amount);
-        if (days > MAX_SCHEDULED_DAYS) {
-            throw new IllegalArgumentException("days: " + days + " (expected: < " + MAX_SCHEDULED_DAYS + ')');
         }
     }
 }

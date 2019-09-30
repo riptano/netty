@@ -40,7 +40,8 @@ public final class DnsNameResolverBuilder {
     private EventLoop eventLoop;
     private ChannelFactory<? extends DatagramChannel> channelFactory;
     private DnsCache resolveCache;
-    private DnsCache authoritativeDnsServerCache;
+    private DnsCnameCache cnameCache;
+    private AuthoritativeDnsServerCache authoritativeDnsServerCache;
     private Integer minTtl;
     private Integer maxTtl;
     private Integer negativeTtl;
@@ -124,6 +125,17 @@ public final class DnsNameResolverBuilder {
     }
 
     /**
+     * Sets the cache for {@code CNAME} mappings.
+     *
+     * @param cnameCache the cache used to cache {@code CNAME} mappings for a domain.
+     * @return {@code this}
+     */
+    public DnsNameResolverBuilder cnameCache(DnsCnameCache cnameCache) {
+        this.cnameCache  = cnameCache;
+        return this;
+    }
+
+    /**
      * Set the factory used to generate objects which can observe individual DNS queries.
      * @param lifecycleObserverFactory the factory used to generate objects which can observe individual DNS queries.
      * @return {@code this}
@@ -139,8 +151,21 @@ public final class DnsNameResolverBuilder {
      *
      * @param authoritativeDnsServerCache the authoritative NS servers cache
      * @return {@code this}
+     * @deprecated Use {@link #authoritativeDnsServerCache(AuthoritativeDnsServerCache)}
      */
+    @Deprecated
     public DnsNameResolverBuilder authoritativeDnsServerCache(DnsCache authoritativeDnsServerCache) {
+        this.authoritativeDnsServerCache = new AuthoritativeDnsServerCacheAdapter(authoritativeDnsServerCache);
+        return this;
+    }
+
+    /**
+     * Sets the cache for authoritative NS servers
+     *
+     * @param authoritativeDnsServerCache the authoritative NS servers cache
+     * @return {@code this}
+     */
+    public DnsNameResolverBuilder authoritativeDnsServerCache(AuthoritativeDnsServerCache authoritativeDnsServerCache) {
         this.authoritativeDnsServerCache = authoritativeDnsServerCache;
         return this;
     }
@@ -335,7 +360,7 @@ public final class DnsNameResolverBuilder {
             list.add(f);
         }
 
-        this.searchDomains = list.toArray(new String[list.size()]);
+        this.searchDomains = list.toArray(new String[0]);
         return this;
     }
 
@@ -353,6 +378,19 @@ public final class DnsNameResolverBuilder {
 
     private DnsCache newCache() {
         return new DefaultDnsCache(intValue(minTtl, 0), intValue(maxTtl, Integer.MAX_VALUE), intValue(negativeTtl, 0));
+    }
+
+    private AuthoritativeDnsServerCache newAuthoritativeDnsServerCache() {
+        return new DefaultAuthoritativeDnsServerCache(
+                intValue(minTtl, 0), intValue(maxTtl, Integer.MAX_VALUE),
+                // Let us use the sane ordering as DnsNameResolver will be used when returning
+                // nameservers from the cache.
+                new NameServerComparator(DnsNameResolver.preferredAddressType(resolvedAddressTypes).addressType()));
+    }
+
+    private DnsCnameCache newCnameCache() {
+        return new DefaultDnsCnameCache(
+                intValue(minTtl, 0), intValue(maxTtl, Integer.MAX_VALUE));
     }
 
     /**
@@ -386,12 +424,14 @@ public final class DnsNameResolverBuilder {
         }
 
         DnsCache resolveCache = this.resolveCache != null ? this.resolveCache : newCache();
-        DnsCache authoritativeDnsServerCache = this.authoritativeDnsServerCache != null ?
-                this.authoritativeDnsServerCache : newCache();
+        DnsCnameCache cnameCache = this.cnameCache != null ? this.cnameCache : newCnameCache();
+        AuthoritativeDnsServerCache authoritativeDnsServerCache = this.authoritativeDnsServerCache != null ?
+                this.authoritativeDnsServerCache : newAuthoritativeDnsServerCache();
         return new DnsNameResolver(
                 eventLoop,
                 channelFactory,
                 resolveCache,
+                cnameCache,
                 authoritativeDnsServerCache,
                 dnsQueryLifecycleObserverFactory,
                 queryTimeoutMillis,
@@ -428,6 +468,9 @@ public final class DnsNameResolverBuilder {
             copiedBuilder.resolveCache(resolveCache);
         }
 
+        if (cnameCache != null) {
+            copiedBuilder.cnameCache(cnameCache);
+        }
         if (maxTtl != null && minTtl != null) {
             copiedBuilder.ttl(minTtl, maxTtl);
         }

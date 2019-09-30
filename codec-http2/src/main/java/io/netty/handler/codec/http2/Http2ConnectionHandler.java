@@ -233,7 +233,7 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
         private ByteBuf clientPrefaceString;
         private boolean prefaceSent;
 
-        public PrefaceDecoder(ChannelHandlerContext ctx) throws Exception {
+        PrefaceDecoder(ChannelHandlerContext ctx) throws Exception {
             clientPrefaceString = clientPrefaceString(encoder.connection());
             // This handler was just added to the context. In case it was handled after
             // the connection became active, send the connection preface now.
@@ -527,8 +527,18 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
         }
     }
 
-    void channelReadComplete0(ChannelHandlerContext ctx) throws Exception {
-        super.channelReadComplete(ctx);
+    final void channelReadComplete0(ChannelHandlerContext ctx) {
+        // Discard bytes of the cumulation buffer if needed.
+        discardSomeReadBytes();
+
+        // Ensure we never stale the HTTP/2 Channel. Flow-control is enforced by HTTP/2.
+        //
+        // See https://tools.ietf.org/html/rfc7540#section-5.2.2
+        if (!ctx.channel().config().isAutoRead()) {
+            ctx.read();
+        }
+
+        ctx.fireChannelReadComplete();
     }
 
     /**
@@ -701,7 +711,9 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
         }
 
         if (stream == null) {
-            resetUnknownStream(ctx, streamId, http2Ex.error().code(), ctx.newPromise());
+            if (!outbound || connection().local().mayHaveCreatedStream(streamId)) {
+                resetUnknownStream(ctx, streamId, http2Ex.error().code(), ctx.newPromise());
+            }
         } else {
             resetStream(ctx, stream, http2Ex.error().code(), ctx.newPromise());
         }
@@ -792,47 +804,37 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
     @Override
     public ChannelFuture goAway(final ChannelHandlerContext ctx, final int lastStreamId, final long errorCode,
                                 final ByteBuf debugData, ChannelPromise promise) {
+        promise = promise.unvoid();
+        final Http2Connection connection = connection();
         try {
-            promise = promise.unvoid();
-            final Http2Connection connection = connection();
-            if (connection().goAwaySent()) {
-                // Protect against re-entrancy. Could happen if writing the frame fails, and error handling
-                // treating this is a connection handler and doing a graceful shutdown...
-                if (lastStreamId == connection().remote().lastStreamKnownByPeer()) {
-                    // Release the data and notify the promise
-                    debugData.release();
-                    return promise.setSuccess();
-                }
-                if (lastStreamId > connection.remote().lastStreamKnownByPeer()) {
-                    throw connectionError(PROTOCOL_ERROR, "Last stream identifier must not increase between " +
-                                                          "sending multiple GOAWAY frames (was '%d', is '%d').",
-                                          connection.remote().lastStreamKnownByPeer(), lastStreamId);
-                }
+            if (!connection.goAwaySent(lastStreamId, errorCode, debugData)) {
+                debugData.release();
+                promise.trySuccess();
+                return promise;
             }
-
-            connection.goAwaySent(lastStreamId, errorCode, debugData);
-
-            // Need to retain before we write the buffer because if we do it after the refCnt could already be 0 and
-            // result in an IllegalRefCountException.
-            debugData.retain();
-            ChannelFuture future = frameWriter().writeGoAway(ctx, lastStreamId, errorCode, debugData, promise);
-
-            if (future.isDone()) {
-                processGoAwayWriteResult(ctx, lastStreamId, errorCode, debugData, future);
-            } else {
-                future.addListener(new ChannelFutureListener() {
-                    @Override
-                    public void operationComplete(ChannelFuture future) throws Exception {
-                        processGoAwayWriteResult(ctx, lastStreamId, errorCode, debugData, future);
-                    }
-                });
-            }
-
-            return future;
-        } catch (Throwable cause) { // Make sure to catch Throwable because we are doing a retain() in this method.
+        } catch (Throwable cause) {
             debugData.release();
-            return promise.setFailure(cause);
+            promise.tryFailure(cause);
+            return promise;
         }
+
+        // Need to retain before we write the buffer because if we do it after the refCnt could already be 0 and
+        // result in an IllegalRefCountException.
+        debugData.retain();
+        ChannelFuture future = frameWriter().writeGoAway(ctx, lastStreamId, errorCode, debugData, promise);
+
+        if (future.isDone()) {
+            processGoAwayWriteResult(ctx, lastStreamId, errorCode, debugData, future);
+        } else {
+            future.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    processGoAwayWriteResult(ctx, lastStreamId, errorCode, debugData, future);
+                }
+            });
+        }
+
+        return future;
     }
 
     /**

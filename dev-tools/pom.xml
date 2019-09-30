@@ -16,16 +16,16 @@
   -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <!--<parent>
+  <parent>
     <groupId>org.sonatype.oss</groupId>
     <artifactId>oss-parent</artifactId>
     <version>7</version>
     <relativePath />
-  </parent>-->
+  </parent>
 
   <groupId>io.netty</groupId>
   <artifactId>netty-dev-tools</artifactId>
-  <version>4.1.25.5.dse</version>
+  <version>4.1.34.Final</version>
 
   <name>Netty/Dev-Tools</name>
 
@@ -52,6 +52,6 @@
   </build>
 
   <scm>
-    <tag>netty-4.1.25.dse</tag>
+    <tag>netty-4.1.34.Final</tag>
   </scm>
 </project>

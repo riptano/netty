@@ -240,6 +240,9 @@ public class AsciiStringCharacterTest {
         assertThat(AsciiString.contentEqualsIgnoreCase(null, "foo"), is(false));
         assertThat(AsciiString.contentEqualsIgnoreCase("bar", null), is(false));
         assertThat(AsciiString.contentEqualsIgnoreCase("FoO", "fOo"), is(true));
+        assertThat(AsciiString.contentEqualsIgnoreCase("FoO", "bar"), is(false));
+        assertThat(AsciiString.contentEqualsIgnoreCase("Foo", "foobar"), is(false));
+        assertThat(AsciiString.contentEqualsIgnoreCase("foobar", "Foo"), is(false));
 
         // Test variations (Ascii + String, Ascii + Ascii, String + Ascii)
         assertThat(AsciiString.contentEqualsIgnoreCase(new AsciiString("FoO"), "fOo"), is(true));
@@ -397,5 +400,19 @@ public class AsciiStringCharacterTest {
     public void testSubStringHashCode() {
         //two "123"s
         assertEquals(AsciiString.hashCode("123"), AsciiString.hashCode("a123".substring(1)));
+    }
+
+    @Test
+    public void testIndexOf() {
+        AsciiString foo = AsciiString.of("This is a test");
+        int i1 = foo.indexOf(' ', 0);
+        assertEquals(4, i1);
+        int i2 = foo.indexOf(' ', i1 + 1);
+        assertEquals(7, i2);
+        int i3 = foo.indexOf(' ', i2 + 1);
+        assertEquals(9, i3);
+        assertTrue(i3 + 1 < foo.length());
+        int i4 = foo.indexOf(' ', i3 + 1);
+        assertEquals(i4, -1);
     }
 }

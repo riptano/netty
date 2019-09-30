@@ -27,8 +27,10 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
 @UnstableApi
 public class Http2MultiplexCodecBuilder
         extends AbstractHttp2ConnectionHandlerBuilder<Http2MultiplexCodec, Http2MultiplexCodecBuilder> {
+    private Http2FrameWriter frameWriter;
 
     final ChannelHandler childHandler;
+    private ChannelHandler upgradeStreamHandler;
 
     Http2MultiplexCodecBuilder(boolean server, ChannelHandler childHandler) {
         server(server);
@@ -41,6 +43,12 @@ public class Http2MultiplexCodecBuilder
             throw new IllegalArgumentException("The handler must be Sharable");
         }
         return handler;
+    }
+
+    // For testing only.
+    Http2MultiplexCodecBuilder frameWriter(Http2FrameWriter frameWriter) {
+        this.frameWriter = checkNotNull(frameWriter, "frameWriter");
+        return this;
     }
 
     /**
@@ -81,6 +89,14 @@ public class Http2MultiplexCodecBuilder
     @Override
     public Http2MultiplexCodecBuilder gracefulShutdownTimeoutMillis(long gracefulShutdownTimeoutMillis) {
         return super.gracefulShutdownTimeoutMillis(gracefulShutdownTimeoutMillis);
+    }
+
+    public Http2MultiplexCodecBuilder withUpgradeStreamHandler(ChannelHandler upgradeStreamHandler) {
+        if (this.isServer()) {
+            throw new IllegalArgumentException("Server codecs don't use an extra handler for the upgrade stream");
+        }
+        this.upgradeStreamHandler = upgradeStreamHandler;
+        return this;
     }
 
     @Override
@@ -151,12 +167,34 @@ public class Http2MultiplexCodecBuilder
 
     @Override
     public Http2MultiplexCodec build() {
+        Http2FrameWriter frameWriter = this.frameWriter;
+        if (frameWriter != null) {
+            // This is to support our tests and will never be executed by the user as frameWriter(...)
+            // is package-private.
+            DefaultHttp2Connection connection = new DefaultHttp2Connection(isServer(), maxReservedStreams());
+            Long maxHeaderListSize = initialSettings().maxHeaderListSize();
+            Http2FrameReader frameReader = new DefaultHttp2FrameReader(maxHeaderListSize == null ?
+                    new DefaultHttp2HeadersDecoder(true) :
+                    new DefaultHttp2HeadersDecoder(true, maxHeaderListSize));
+
+            if (frameLogger() != null) {
+                frameWriter = new Http2OutboundFrameLogger(frameWriter, frameLogger());
+                frameReader = new Http2InboundFrameLogger(frameReader, frameLogger());
+            }
+            Http2ConnectionEncoder encoder = new DefaultHttp2ConnectionEncoder(connection, frameWriter);
+            if (encoderEnforceMaxConcurrentStreams()) {
+                encoder = new StreamBufferingEncoder(encoder);
+            }
+            Http2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, frameReader);
+
+            return build(decoder, encoder, initialSettings());
+        }
         return super.build();
     }
 
     @Override
     protected Http2MultiplexCodec build(
             Http2ConnectionDecoder decoder, Http2ConnectionEncoder encoder, Http2Settings initialSettings) {
-        return new Http2MultiplexCodec(encoder, decoder, initialSettings, childHandler);
+        return new Http2MultiplexCodec(encoder, decoder, initialSettings, childHandler, upgradeStreamHandler);
     }
 }

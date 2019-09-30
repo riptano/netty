@@ -78,7 +78,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
         }
 
         final ScheduledFutureTask<?>[] scheduledTasks =
-                scheduledTaskQueue.toArray(new ScheduledFutureTask<?>[scheduledTaskQueue.size()]);
+                scheduledTaskQueue.toArray(new ScheduledFutureTask<?>[0]);
 
         for (ScheduledFutureTask<?> task: scheduledTasks) {
             task.cancelWithoutRemove(false);
@@ -159,7 +159,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
         if (delay < 0) {
             delay = 0;
         }
-        validateScheduled(delay, unit);
+        validateScheduled0(delay, unit);
 
         return schedule(new ScheduledFutureTask<Void>(
                 this, command, null, ScheduledFutureTask.deadlineNanos(unit.toNanos(delay))));
@@ -172,7 +172,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
         if (delay < 0) {
             delay = 0;
         }
-        validateScheduled(delay, unit);
+        validateScheduled0(delay, unit);
 
         return schedule(new ScheduledFutureTask<V>(
                 this, callable, ScheduledFutureTask.deadlineNanos(unit.toNanos(delay))));
@@ -190,8 +190,8 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
             throw new IllegalArgumentException(
                     String.format("period: %d (expected: > 0)", period));
         }
-        validateScheduled(initialDelay, unit);
-        validateScheduled(period, unit);
+        validateScheduled0(initialDelay, unit);
+        validateScheduled0(period, unit);
 
         return schedule(new ScheduledFutureTask<Void>(
                 this, Executors.<Void>callable(command, null),
@@ -211,17 +211,25 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
                     String.format("delay: %d (expected: > 0)", delay));
         }
 
-        validateScheduled(initialDelay, unit);
-        validateScheduled(delay, unit);
+        validateScheduled0(initialDelay, unit);
+        validateScheduled0(delay, unit);
 
         return schedule(new ScheduledFutureTask<Void>(
                 this, Executors.<Void>callable(command, null),
                 ScheduledFutureTask.deadlineNanos(unit.toNanos(initialDelay)), -unit.toNanos(delay)));
     }
 
+    @SuppressWarnings("deprecation")
+    private void validateScheduled0(long amount, TimeUnit unit) {
+        validateScheduled(amount, unit);
+    }
+
     /**
      * Sub-classes may override this to restrict the maximal amount of time someone can use to schedule a task.
+     *
+     * @deprecated will be removed in the future.
      */
+    @Deprecated
     protected void validateScheduled(long amount, TimeUnit unit) {
         // NOOP
     }

@@ -424,6 +424,11 @@ class WrappedCompositeByteBuf extends CompositeByteBuf {
     }
 
     @Override
+    final boolean isAccessible() {
+        return wrapped.isAccessible();
+    }
+
+    @Override
     public ByteBuf duplicate() {
         return wrapped.duplicate();
     }

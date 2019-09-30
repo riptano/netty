@@ -76,10 +76,7 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
 
     // Lazily instantiated tasks used to trigger events to a handler with different executor.
     // There is no need to make this volatile as at worse it will just create a few more instances then needed.
-    private Runnable invokeChannelReadCompleteTask;
-    private Runnable invokeReadTask;
-    private Runnable invokeChannelWritableStateChangedTask;
-    private Runnable invokeFlushTask;
+    private Tasks invokeTasks;
 
     private volatile int handlerState = INIT;
 
@@ -379,16 +376,11 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         if (executor.inEventLoop()) {
             next.invokeChannelReadComplete();
         } else {
-            Runnable task = next.invokeChannelReadCompleteTask;
-            if (task == null) {
-                next.invokeChannelReadCompleteTask = task = new Runnable() {
-                    @Override
-                    public void run() {
-                        next.invokeChannelReadComplete();
-                    }
-                };
+            Tasks tasks = next.invokeTasks;
+            if (tasks == null) {
+                next.invokeTasks = tasks = new Tasks(next);
             }
-            executor.execute(task);
+            executor.execute(tasks.invokeChannelReadCompleteTask);
         }
     }
 
@@ -415,16 +407,11 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         if (executor.inEventLoop()) {
             next.invokeChannelWritabilityChanged();
         } else {
-            Runnable task = next.invokeChannelWritableStateChangedTask;
-            if (task == null) {
-                next.invokeChannelWritableStateChangedTask = task = new Runnable() {
-                    @Override
-                    public void run() {
-                        next.invokeChannelWritabilityChanged();
-                    }
-                };
+            Tasks tasks = next.invokeTasks;
+            if (tasks == null) {
+                next.invokeTasks = tasks = new Tasks(next);
             }
-            executor.execute(task);
+            executor.execute(tasks.invokeChannelWritableStateChangedTask);
         }
     }
 
@@ -672,16 +659,11 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         if (executor.inEventLoop()) {
             next.invokeRead();
         } else {
-            Runnable task = next.invokeReadTask;
-            if (task == null) {
-                next.invokeReadTask = task = new Runnable() {
-                    @Override
-                    public void run() {
-                        next.invokeRead();
-                    }
-                };
+            Tasks tasks = next.invokeTasks;
+            if (tasks == null) {
+                next.invokeTasks = tasks = new Tasks(next);
             }
-            executor.execute(task);
+            executor.execute(tasks.invokeReadTask);
         }
 
         return this;
@@ -706,20 +688,6 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
 
     @Override
     public ChannelFuture write(final Object msg, final ChannelPromise promise) {
-        if (msg == null) {
-            throw new NullPointerException("msg");
-        }
-
-        try {
-            if (isNotValidPromise(promise, true)) {
-                ReferenceCountUtil.release(msg);
-                // cancelled
-                return promise;
-            }
-        } catch (RuntimeException e) {
-            ReferenceCountUtil.release(msg);
-            throw e;
-        }
         write(msg, false, promise);
 
         return promise;
@@ -748,16 +716,11 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         if (executor.inEventLoop()) {
             next.invokeFlush();
         } else {
-            Runnable task = next.invokeFlushTask;
-            if (task == null) {
-                next.invokeFlushTask = task = new Runnable() {
-                    @Override
-                    public void run() {
-                        next.invokeFlush();
-                    }
-                };
+            Tasks tasks = next.invokeTasks;
+            if (tasks == null) {
+                next.invokeTasks = tasks = new Tasks(next);
             }
-            safeExecute(executor, task, channel().voidPromise(), null);
+            safeExecute(executor, tasks.invokeFlushTask, channel().voidPromise(), null);
         }
 
         return this;
@@ -781,18 +744,7 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
 
     @Override
     public ChannelFuture writeAndFlush(Object msg, ChannelPromise promise) {
-        if (msg == null) {
-            throw new NullPointerException("msg");
-        }
-
-        if (isNotValidPromise(promise, true)) {
-            ReferenceCountUtil.release(msg);
-            // cancelled
-            return promise;
-        }
-
         write(msg, true, promise);
-
         return promise;
     }
 
@@ -806,6 +758,18 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
     }
 
     private void write(Object msg, boolean flush, ChannelPromise promise) {
+        ObjectUtil.checkNotNull(msg, "msg");
+        try {
+            if (isNotValidPromise(promise, true)) {
+                ReferenceCountUtil.release(msg);
+                // cancelled
+                return;
+            }
+        } catch (RuntimeException e) {
+            ReferenceCountUtil.release(msg);
+            throw e;
+        }
+
         AbstractChannelHandlerContext next = findContextOutbound();
         final Object m = pipeline.touch(msg, next);
         EventExecutor executor = next.executor();
@@ -816,13 +780,19 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
                 next.invokeWrite(m, promise);
             }
         } else {
-            AbstractWriteTask task;
+            final AbstractWriteTask task;
             if (flush) {
                 task = WriteAndFlushTask.newInstance(next, m, promise);
             }  else {
                 task = WriteTask.newInstance(next, m, promise);
             }
-            safeExecute(executor, task, promise, m);
+            if (!safeExecute(executor, task, promise, m)) {
+                // We failed to submit the AbstractWriteTask. We need to cancel it so we decrement the pending bytes
+                // and put it back in the Recycler for re-use later.
+                //
+                // See https://github.com/netty/netty/issues/8343.
+                task.cancel();
+            }
         }
     }
 
@@ -956,14 +926,17 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         handlerState = REMOVE_COMPLETE;
     }
 
-    final void setAddComplete() {
+    final boolean setAddComplete() {
         for (;;) {
             int oldState = handlerState;
+            if (oldState == REMOVE_COMPLETE) {
+                return false;
+            }
             // Ensure we never update when the handlerState is REMOVE_COMPLETE already.
             // oldState is usually ADD_PENDING but can also be REMOVE_COMPLETE when an EventExecutor is used that is not
             // exposing ordering guarantees.
-            if (oldState == REMOVE_COMPLETE || HANDLER_STATE_UPDATER.compareAndSet(this, oldState, ADD_COMPLETE)) {
-                return;
+            if (HANDLER_STATE_UPDATER.compareAndSet(this, oldState, ADD_COMPLETE)) {
+                return true;
             }
         }
     }
@@ -971,6 +944,26 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
     final void setAddPending() {
         boolean updated = HANDLER_STATE_UPDATER.compareAndSet(this, INIT, ADD_PENDING);
         assert updated; // This should always be true as it MUST be called before setAddComplete() or setRemoved().
+    }
+
+    final void callHandlerAdded() throws Exception {
+        // We must call setAddComplete before calling handlerAdded. Otherwise if the handlerAdded method generates
+        // any pipeline events ctx.handler() will miss them because the state will not allow it.
+        if (setAddComplete()) {
+            handler().handlerAdded(this);
+        }
+    }
+
+    final void callHandlerRemoved() throws Exception {
+        try {
+            // Only call handlerRemoved(...) if we called handlerAdded(...) before.
+            if (handlerState == ADD_COMPLETE) {
+                handler().handlerRemoved(this);
+            }
+        } finally {
+            // Mark the handler as removed in any case.
+            setRemoved();
+        }
     }
 
     /**
@@ -1002,9 +995,10 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         return channel().hasAttr(key);
     }
 
-    private static void safeExecute(EventExecutor executor, Runnable runnable, ChannelPromise promise, Object msg) {
+    private static boolean safeExecute(EventExecutor executor, Runnable runnable, ChannelPromise promise, Object msg) {
         try {
             executor.execute(runnable);
+            return true;
         } catch (Throwable cause) {
             try {
                 promise.setFailure(cause);
@@ -1013,6 +1007,7 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
                     ReferenceCountUtil.release(msg);
                 }
             }
+            return false;
         }
     }
 
@@ -1063,18 +1058,33 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         @Override
         public final void run() {
             try {
-                // Check for null as it may be set to null if the channel is closed already
-                if (ESTIMATE_TASK_SIZE_ON_SUBMIT) {
-                    ctx.pipeline.decrementPendingOutboundBytes(size);
-                }
+                decrementPendingOutboundBytes();
                 write(ctx, msg, promise);
             } finally {
-                // Set to null so the GC can collect them directly
-                ctx = null;
-                msg = null;
-                promise = null;
-                handle.recycle(this);
+                recycle();
             }
+        }
+
+        void cancel() {
+            try {
+                decrementPendingOutboundBytes();
+            } finally {
+                recycle();
+            }
+        }
+
+        private void decrementPendingOutboundBytes() {
+            if (ESTIMATE_TASK_SIZE_ON_SUBMIT) {
+                ctx.pipeline.decrementPendingOutboundBytes(size);
+            }
+        }
+
+        private void recycle() {
+            // Set to null so the GC can collect them directly
+            ctx = null;
+            msg = null;
+            promise = null;
+            handle.recycle(this);
         }
 
         protected void write(AbstractChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
@@ -1091,7 +1101,7 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
             }
         };
 
-        private static WriteTask newInstance(
+        static WriteTask newInstance(
                 AbstractChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
             WriteTask task = RECYCLER.get();
             init(task, ctx, msg, promise);
@@ -1112,7 +1122,7 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
             }
         };
 
-        private static WriteAndFlushTask newInstance(
+        static WriteAndFlushTask newInstance(
                 AbstractChannelHandlerContext ctx, Object msg,  ChannelPromise promise) {
             WriteAndFlushTask task = RECYCLER.get();
             init(task, ctx, msg, promise);
@@ -1127,6 +1137,38 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap
         public void write(AbstractChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
             super.write(ctx, msg, promise);
             ctx.invokeFlush();
+        }
+    }
+
+    private static final class Tasks {
+        private final AbstractChannelHandlerContext next;
+        private final Runnable invokeChannelReadCompleteTask = new Runnable() {
+            @Override
+            public void run() {
+                next.invokeChannelReadComplete();
+            }
+        };
+        private final Runnable invokeReadTask = new Runnable() {
+            @Override
+            public void run() {
+                next.invokeRead();
+            }
+        };
+        private final Runnable invokeChannelWritableStateChangedTask = new Runnable() {
+            @Override
+            public void run() {
+                next.invokeChannelWritabilityChanged();
+            }
+        };
+        private final Runnable invokeFlushTask = new Runnable() {
+            @Override
+            public void run() {
+                next.invokeFlush();
+            }
+        };
+
+        Tasks(AbstractChannelHandlerContext next) {
+            this.next = next;
         }
     }
 }

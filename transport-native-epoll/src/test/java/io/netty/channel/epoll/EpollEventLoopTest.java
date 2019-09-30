@@ -15,53 +15,52 @@
  */
 package io.netty.channel.epoll;
 
+import io.netty.channel.DefaultSelectStrategyFactory;
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.RejectedExecutionHandlers;
+import io.netty.util.concurrent.ThreadPerTaskExecutor;
 import org.junit.Test;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 public class EpollEventLoopTest {
 
-    @Test(timeout = 5000L)
-    public void testScheduleBigDelayOverMax() {
-        EventLoopGroup group = new EpollEventLoopGroup(1);
+    @Test
+    public void testScheduleBigDelayNotOverflow() {
+        final AtomicReference<Throwable> capture = new AtomicReference<Throwable>();
 
-        final EventLoop el = group.next();
+        final EventLoopGroup group = new EpollEventLoop(null,
+                new ThreadPerTaskExecutor(new DefaultThreadFactory(getClass())), 0,
+                DefaultSelectStrategyFactory.INSTANCE.newSelectStrategy(), RejectedExecutionHandlers.reject()) {
+            @Override
+            void handleLoopException(Throwable t) {
+                capture.set(t);
+                super.handleLoopException(t);
+            }
+        };
+
         try {
-            el.schedule(new Runnable() {
+            final EventLoop eventLoop = group.next();
+            Future<?> future = eventLoop.schedule(new Runnable() {
                 @Override
                 public void run() {
                     // NOOP
                 }
-            }, Integer.MAX_VALUE, TimeUnit.DAYS);
-            fail();
-        } catch (IllegalArgumentException expected) {
-            // expected
+            }, Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+
+            assertFalse(future.awaitUninterruptibly(1000));
+            assertTrue(future.cancel(true));
+            assertNull(capture.get());
+        } finally {
+            group.shutdownGracefully();
         }
-
-        group.shutdownGracefully();
-    }
-
-    @Test
-    public void testScheduleBigDelay() {
-        EventLoopGroup group = new EpollEventLoopGroup(1);
-
-        final EventLoop el = group.next();
-        Future<?> future = el.schedule(new Runnable() {
-            @Override
-            public void run() {
-                // NOOP
-            }
-        }, EpollEventLoop.MAX_SCHEDULED_DAYS, TimeUnit.DAYS);
-
-        assertFalse(future.awaitUninterruptibly(1000));
-        assertTrue(future.cancel(true));
-        group.shutdownGracefully();
     }
 }
