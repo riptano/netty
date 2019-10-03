@@ -11,7 +11,5 @@ if [ ! -f /usr/bin/docker ]; then
     sudo apt-get install -y docker-ce
 fi
 
-docker build -f docker/Dockerfile-netty-centos6 . -t netty-centos6
-
-docker run -it -v ~/.m2:/root/.m2 -v ~/.ssh:/root/.ssh -v ~/.gnupg:/root/.gnupg -v `pwd`:/code -w /code --entrypoint="" netty-centos6 bash -ic "mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"artifactory::default::https://repo.sjc.dsinternal.org/artifactory/datastax-releases-local\""
-
+sudo docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
+sudo docker run -t -v ~/.m2:/root/.m2 -v ~/.ssh:/root/.ssh -v ~/.gnupg:/root/.gnupg -v `pwd`:/code -w /code --entrypoint="" netty-centos6 bash -ic "mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"artifactory::default::https://repo.sjc.dsinternal.org/artifactory/datastax-releases-local\""
