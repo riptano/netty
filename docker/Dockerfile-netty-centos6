@@ -23,8 +23,8 @@ RUN yum install -y \
  make \
  openssl-devel \
  tar \
- wget
-
+ wget \
+ libaio
 
 RUN wget -q http://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz && tar xfz apache-maven-$MAVEN_VERSION-bin.tar.gz && mv apache-maven-$MAVEN_VERSION /opt/
 
