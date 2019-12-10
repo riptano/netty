@@ -673,13 +673,15 @@ public final class PlatformDependent {
     }
 
     private static void incrementMemoryCounter(int capacity) {
-        if (DIRECT_MEMORY_COUNTER != null) {
-            long newUsedMemory = DIRECT_MEMORY_COUNTER.addAndGet(capacity);
+        for (;;) {
+            long usedMemory = DIRECT_MEMORY_COUNTER.get();
+            long newUsedMemory = usedMemory + capacity;
             if (DIRECT_MEMORY_LIMIT > 0 && newUsedMemory > DIRECT_MEMORY_LIMIT) {
-                DIRECT_MEMORY_COUNTER.addAndGet(-capacity);
                 throw new OutOfDirectMemoryError("failed to allocate " + capacity
-                        + " byte(s) of direct memory (used: " + (newUsedMemory - capacity)
-                        + ", max: " + DIRECT_MEMORY_LIMIT + ')');
+                        + " byte(s) of direct memory (used: " + usedMemory + ", max: " + DIRECT_MEMORY_LIMIT + ')');
+            }
+            if (DIRECT_MEMORY_COUNTER.compareAndSet(usedMemory, newUsedMemory)) {
+                break;
             }
         }
     }
