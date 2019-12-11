@@ -745,6 +745,11 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
             }
         }
 
+        if (nameEnd == length) {
+            // There was no colon present at all.
+            throw new IllegalArgumentException("No colon found");
+        }
+
         for (colonEnd = nameEnd; colonEnd < length; colonEnd ++) {
             if (sb.charAt(colonEnd) == ':') {
                 colonEnd ++;
