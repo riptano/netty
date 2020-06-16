@@ -4,8 +4,7 @@ on: push
 
 jobs:
   build:
-
-    runs-on: [ubuntu-latest, macos-latest]
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v2
@@ -24,20 +23,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p ~/.m2
-          echo "<settings><servers><server><id>gh</id><username>$(echo "$GITHUB_REPOSITORY" | awk -F / '{print $1}')</username><password>\${env.GITHUB_TOKEN}</password></server></servers></settings>" > ~/.m2/settings.xml
+          echo "<settings><servers><server><id>gh</id><username>$(echo "$GITHUB_REPOSITORY" | awk -F / '{print $1}')</username><password>${GITHUB_TOKEN}</password></server></servers></settings>" > ~/.m2/settings.xml
 
       - name: Netty in Centos 6 (needed for old libc compat)
-        if: startsWith(matrix.os,'ubuntu')
         run: |
           docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
           REPO="gh::default::https://maven.pkg.github.com/${GITHUB_REPOSITORY}"
           docker run -t -v ~/.m2:/root/.m2 -v `pwd`:/code -w /code --entrypoint="" netty-centos6 bash -ic "mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"${REPO}\" -DaltSnapshotDeploymentRepository=\"${REPO}\""
-
-      - name: Netty for osx (needed for kqueue lib)
-        if: startsWith(matrix.os,'macos')
-        run: |
-          REPO="gh::default::https://maven.pkg.github.com/${GITHUB_REPOSITORY}"
-          mvn -B clean -DskipTests
-          mvn -B -U -pl transport-native-unix-common,transport-native-kqueue -Partifactory deploy -DskipTests -DaltDeploymentRepository="${REPO}" -DaltSnapshotDeploymentRepository="${REPO}"
 
 
