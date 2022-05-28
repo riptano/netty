@@ -124,6 +124,7 @@ static void netty_epoll_linuxsocket_setTcpMd5Sig(JNIEnv* env, jclass clazz, jint
     struct sockaddr_storage addr;
     socklen_t addrSize;
     if (netty_unix_socket_initSockaddr(env, address, scopeId, 0, &addr, &addrSize) == -1) {
+        netty_unix_errors_throwIOException(env, "Could not init sockaddr");
         return;
     }
 
@@ -154,7 +155,7 @@ static void netty_epoll_linuxsocket_setTcpMd5Sig(JNIEnv* env, jclass clazz, jint
     }
 
     if (setsockopt(fd, IPPROTO_TCP, TCP_MD5SIG, &md5sig, sizeof(md5sig)) < 0) {
-        netty_unix_errors_throwChannelExceptionErrorNo(env, "setsockopt() failed: ", errno);
+        netty_unix_errors_throwIOExceptionErrorNo(env, "setsockopt() failed: ", errno);
     }
 }
 
