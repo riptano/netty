@@ -20,7 +20,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.78.Final</version>
+    <version>4.1.78.1.dse</version>
   </parent>
 
   <artifactId>netty-resolver-dns</artifactId>
@@ -91,4 +91,3 @@
     </dependency>
   </dependencies>
 </project>
-

@@ -85,4 +85,9 @@ class EpollRecvByteAllocatorHandle extends DelegatingHandle implements ExtendedH
         // We must override the supplier which determines if there maybe more data to read.
         return continueReading(defaultMaybeMoreDataSupplier);
     }
+
+    @Override
+    public void channelClosed() {
+        delegate().channelClosed();
+    }
 }

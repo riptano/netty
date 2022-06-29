@@ -493,7 +493,7 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
         public KQueueRecvByteAllocatorHandle recvBufAllocHandle() {
             if (allocHandle == null) {
                 allocHandle = new KQueueRecvByteAllocatorHandle(
-                        (RecvByteBufAllocator.ExtendedHandle) super.recvBufAllocHandle());
+                    (RecvByteBufAllocator.ExtendedHandle) super.recvBufAllocHandle());
             }
             return allocHandle;
         }

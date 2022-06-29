@@ -101,6 +101,10 @@ public class DefaultMaxBytesRecvByteBufAllocator implements MaxBytesRecvByteBufA
         public int attemptedBytesRead() {
             return attemptBytesRead;
         }
+
+        @Override
+        public void channelClosed() {
+        }
     }
 
     public DefaultMaxBytesRecvByteBufAllocator() {

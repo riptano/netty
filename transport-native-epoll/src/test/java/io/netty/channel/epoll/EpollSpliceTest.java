@@ -306,7 +306,9 @@ public class EpollSpliceTest {
         @Override
         public void channelActive(ChannelHandlerContext ctx) throws Exception {
             final EpollSocketChannel ch = (EpollSocketChannel) ctx.channel();
-            final FileDescriptor fd = FileDescriptor.from(file);
+            final FileDescriptor fd = FileDescriptor.from(file, FileDescriptor.O_WRONLY |
+                                                                FileDescriptor.O_CREAT |
+                                                                FileDescriptor.O_TRUNC);
 
             // splice two halves separately to test starting offset
             future = ch.spliceTo(fd, 0, data.length / 2);

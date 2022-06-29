@@ -26,7 +26,7 @@
   <groupId>io.netty</groupId>
   <artifactId>netty-parent</artifactId>
   <packaging>pom</packaging>
-  <version>4.1.78.Final</version>
+  <version>4.1.78.1.dse</version>
 
   <name>Netty</name>
   <url>https://netty.io/</url>
@@ -53,7 +53,7 @@
     <url>https://github.com/netty/netty</url>
     <connection>scm:git:git://github.com/netty/netty.git</connection>
     <developerConnection>scm:git:ssh://git@github.com/netty/netty.git</developerConnection>
-    <tag>netty-4.1.78.Final</tag>
+    <tag>netty-4.1.78.Final</tag> <!-- TODO: new tag! -->
   </scm>
 
   <developers>
@@ -574,6 +574,8 @@
     <skipNativeImageTestsuite>true</skipNativeImageTestsuite>
     <skipShadingTestsuite>false</skipShadingTestsuite>
     <skipDeploy>false</skipDeploy>
+    <revapi.skip>true</revapi.skip>
+    <japicmp.skip>true</japicmp.skip>
   </properties>
 
   <modules>
@@ -1255,6 +1257,66 @@
             <version>1.1</version>
           </signature>
           <ignores>
+            <ignore>sun.misc.Unsafe</ignore>
+            <ignore>sun.misc.Cleaner</ignore>
+            <ignore>sun.nio.ch.DirectBuffer</ignore>
+
+            <ignore>java.util.zip.Deflater</ignore>
+
+            <!-- Used for NIO -->
+            <ignore>java.nio.channels.DatagramChannel</ignore>
+            <ignore>java.nio.channels.MembershipKey</ignore>
+            <ignore>java.nio.channels.ServerSocketChannel</ignore>
+            <ignore>java.nio.channels.SocketChannel</ignore>
+            <ignore>java.net.StandardProtocolFamily</ignore>
+            <ignore>java.nio.channels.spi.SelectorProvider</ignore>
+            <ignore>java.net.SocketOption</ignore>
+            <ignore>java.net.StandardSocketOptions</ignore>
+            <ignore>java.nio.channels.NetworkChannel</ignore>
+
+            <!-- Used for aio -->
+            <ignore>java.nio.channels.AsynchronousFileChannel</ignore>
+            <ignore>java.nio.channels.CompletionHandler</ignore>
+            <ignore>java.util.concurrent.CompletableFuture</ignore>
+
+            <!-- Self-signed certificate generation -->
+            <ignore>sun.security.x509.AlgorithmId</ignore>
+            <ignore>sun.security.x509.CertificateAlgorithmId</ignore>
+            <ignore>sun.security.x509.CertificateIssuerName</ignore>
+            <ignore>sun.security.x509.CertificateSerialNumber</ignore>
+            <ignore>sun.security.x509.CertificateSubjectName</ignore>
+            <ignore>sun.security.x509.CertificateValidity</ignore>
+            <ignore>sun.security.x509.CertificateVersion</ignore>
+            <ignore>sun.security.x509.CertificateX509Key</ignore>
+            <ignore>sun.security.x509.X500Name</ignore>
+            <ignore>sun.security.x509.X509CertInfo</ignore>
+            <ignore>sun.security.x509.X509CertImpl</ignore>
+
+            <!-- SSLSession implementation -->
+            <ignore>javax.net.ssl.SSLEngine</ignore>
+            <ignore>javax.net.ssl.ExtendedSSLSession</ignore>
+            <ignore>javax.net.ssl.X509ExtendedTrustManager</ignore>
+            <ignore>javax.net.ssl.SSLParameters</ignore>
+            <ignore>javax.net.ssl.SNIServerName</ignore>
+            <ignore>javax.net.ssl.SNIHostName</ignore>
+            <ignore>javax.net.ssl.SNIMatcher</ignore>
+            <ignore>java.security.AlgorithmConstraints</ignore>
+            <ignore>java.security.cert.CertificateRevokedException</ignore>
+            <ignore>java.security.cert.CertPathValidatorException</ignore>
+            <ignore>java.security.cert.CertPathValidatorException$Reason</ignore>
+            <ignore>java.security.cert.CertPathValidatorException$BasicReason</ignore>
+
+            <ignore>java.util.concurrent.ConcurrentLinkedDeque</ignore>
+            <ignore>java.util.concurrent.ThreadLocalRandom</ignore>
+
+            <!-- Compression -->
+            <ignore>java.util.zip.CRC32</ignore>
+            <ignore>java.util.zip.Adler32</ignore>
+
+            <!-- NioDatagramChannel implementation -->
+            <ignore>java.net.ProtocolFamily</ignore>
+
+            <!-- JDK 9 -->
             <ignore>java.nio.ByteBuffer</ignore>
           </ignores>
           <annotations>
