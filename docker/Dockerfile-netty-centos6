@@ -1,13 +1,7 @@
-FROM centos:6
-MAINTAINER netty@googlegroups.com
-ENTRYPOINT /bin/bash
+FROM centos:6.10
 
-ENV SOURCE_DIR $HOME/source
-ENV MAVEN_VERSION 3.2.5
-ENV JAVA_VERSION 1.8.0
-
-RUN mkdir $SOURCE_DIR
-WORKDIR $SOURCE_DIR
+# Update as we need to use the vault now.
+RUN sed -i -e 's/^mirrorlist/#mirrorlist/g' -e 's/^#baseurl=http:\/\/mirror.centos.org\/centos\/$releasever\//baseurl=https:\/\/linuxsoft.cern.ch\/centos-vault\/\/6.10\//g' /etc/yum.repos.d/CentOS-Base.repo
 
 # install dependencies
 RUN yum install -y \
@@ -16,21 +10,33 @@ RUN yum install -y \
  automake \
  git \
  glibc-devel \
- java-$JAVA_VERSION-openjdk-devel \
  libtool \
  lksctp-tools \
  lsb-core \
  make \
  openssl-devel \
  tar \
+ unzip \
  wget \
- libaio	\
+ zip \
+ libaio \
  libaio-devel
 
-RUN wget -q https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz && tar xfz apache-maven-$MAVEN_VERSION-bin.tar.gz && mv apache-maven-$MAVEN_VERSION /opt/
 
-RUN echo 'PATH=/opt/apache-maven-$MAVEN_VERSION/bin:$PATH' >> ~/.bashrc
+# Downloading and installing SDKMAN!
+RUN curl -s "https://get.sdkman.io" | bash
 
-RUN echo 'export JAVA_HOME="/usr/lib/jvm/java-$JAVA_VERSION/"' >> ~/.bashrc
+ARG java_version="8.0.302-zulu"
+ENV JAVA_VERSION $java_version
 
-RUN rm -rf $SOURCE_DIR
+# Installing Java removing some unnecessary SDKMAN files
+RUN bash -c "source $HOME/.sdkman/bin/sdkman-init.sh && \
+    yes | sdk install java $JAVA_VERSION && \
+    rm -rf $HOME/.sdkman/archives/* && \
+    rm -rf $HOME/.sdkman/tmp/*"
+
+RUN echo 'export JAVA_HOME="/root/.sdkman/candidates/java/current"' >> ~/.bashrc
+RUN echo 'PATH=/jdk/bin:$PATH' >> ~/.bashrc
+
+# when the JDK is GraalVM install native-image
+RUN if [ -O /root/.sdkman/candidates/java/current/bin/gu ]; then /root/.sdkman/candidates/java/current/bin/gu install native-image; else echo "Not GraalVM, skip installation of native-image" ; fi

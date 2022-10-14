@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [ ! -f /usr/bin/docker ]; then
+if ! which docker > /dev/null ; then
     export DEBIAN_FRONTEND=noninteractive
     sudo apt-get update
     sudo apt-get install -y software-properties-common
@@ -12,4 +12,4 @@ if [ ! -f /usr/bin/docker ]; then
 fi
 
 sudo docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
-sudo docker run -t -v ~/.m2:/root/.m2 -v ~/.ssh:/root/.ssh -v ~/.gnupg:/root/.gnupg -v `pwd`:/code -w /code --entrypoint="" netty-centos6 bash -ic "mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"artifactory::default::https://repo.sjc.dsinternal.org/artifactory/datastax-releases-local\""
+sudo docker run -t -v ~/.m2:/root/.m2 -v ~/.ssh:/root/.ssh -v ~/.gnupg:/root/.gnupg -v `pwd`:/code -w /code --entrypoint="" netty-centos6 bash -ic "./mvnw -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"artifactory::default::https://repo.aws.dsinternal.org/artifactory/datastax-releases-local\""
