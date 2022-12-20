@@ -55,7 +55,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@link Selector} and so does the multi-plexing of these in the event loop.
  *
  */
-public final class NioEventLoop extends SingleThreadEventLoop {
+public class NioEventLoop extends SingleThreadEventLoop {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(NioEventLoop.class);
 
@@ -136,7 +136,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
     private int cancelledKeys;
     private boolean needsToSelectAgain;
 
-    NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selectorProvider,
+    protected NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selectorProvider,
                  SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler,
                  EventLoopTaskQueueFactory taskQueueFactory, EventLoopTaskQueueFactory tailTaskQueueFactory) {
         super(parent, executor, false, newTaskQueue(taskQueueFactory), newTaskQueue(tailTaskQueueFactory),

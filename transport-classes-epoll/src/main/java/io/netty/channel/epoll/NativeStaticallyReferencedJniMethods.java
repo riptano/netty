@@ -35,6 +35,8 @@ final class NativeStaticallyReferencedJniMethods {
     static native int epollrdhup();
     static native int epollet();
     static native int epollerr();
+    static native int efdnonblock();
+    static native int eagain();
     static native long ssizeMax();
     static native int tcpMd5SigMaxKeyLen();
     static native int iovMax();

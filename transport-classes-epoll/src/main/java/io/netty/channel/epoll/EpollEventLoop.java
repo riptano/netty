@@ -38,14 +38,17 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.Math.min;
 
+import io.netty.util.internal.logging.InternalLogLevel;
+
 /**
  * {@link EventLoop} which uses epoll under the covers. Only works on Linux!
  */
-class EpollEventLoop extends SingleThreadEventLoop {
+public class EpollEventLoop extends SingleThreadEventLoop {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(EpollEventLoop.class);
     private static final long EPOLL_WAIT_MILLIS_THRESHOLD =
             SystemPropertyUtil.getLong("io.netty.channel.epoll.epollWaitThreshold", 10);
@@ -56,19 +59,20 @@ class EpollEventLoop extends SingleThreadEventLoop {
         Epoll.ensureAvailability();
     }
 
-    private final FileDescriptor epollFd;
-    private final FileDescriptor eventFd;
+    protected final FileDescriptor epollFd;
+    protected final FileDescriptor eventFd;
     private final FileDescriptor timerFd;
+    protected final AIOContext aioContext;
     private final IntObjectMap<AbstractEpollChannel> channels = new IntObjectHashMap<AbstractEpollChannel>(4096);
-    private final boolean allowGrowing;
-    private final EpollEventArray events;
+    protected final boolean allowGrowing;
+    protected final EpollEventArray events;
 
     // These are initialized on first use
     private IovArray iovArray;
     private NativeDatagramPacketArray datagramPacketArray;
 
-    private final SelectStrategy selectStrategy;
-    private final IntSupplier selectNowSupplier = new IntSupplier() {
+    protected final SelectStrategy selectStrategy;
+    protected final IntSupplier selectNowSupplier = new IntSupplier() {
         @Override
         public int get() throws Exception {
             return epollWaitNow();
@@ -89,9 +93,10 @@ class EpollEventLoop extends SingleThreadEventLoop {
     // See https://man7.org/linux/man-pages/man2/timerfd_create.2.html.
     private static final long MAX_SCHEDULED_TIMERFD_NS = 999999999;
 
-    EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
-                   SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler,
-                   EventLoopTaskQueueFactory taskQueueFactory, EventLoopTaskQueueFactory tailTaskQueueFactory) {
+    protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
+                             SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler,
+                             EventLoopTaskQueueFactory taskQueueFactory, EventLoopTaskQueueFactory tailTaskQueueFactory,
+                             AIOContext.Config aio) {
         super(parent, executor, false, newTaskQueue(taskQueueFactory), newTaskQueue(tailTaskQueueFactory),
                 rejectedExecutionHandler);
         selectStrategy = ObjectUtil.checkNotNull(strategy, "strategy");
@@ -106,9 +111,23 @@ class EpollEventLoop extends SingleThreadEventLoop {
         FileDescriptor epollFd = null;
         FileDescriptor eventFd = null;
         FileDescriptor timerFd = null;
+        AIOContext aioContext = null;
         try {
             this.epollFd = epollFd = Native.newEpollCreate();
             this.eventFd = eventFd = Native.newEventFd();
+
+            if (aio != null && Aio.isAvailable()) {
+                try {
+                    aioContext = Native.createAIOContext(aio);
+                    Native.epollCtlAdd(epollFd.intValue(),
+                                       aioContext.getEventFd().intValue(),
+                                       Native.EPOLLIN | Native.EFDNONBLOCK | Native.EPOLLET);
+                    logger.info("Created AIO Context with params: {}", aio);
+                } catch (Throwable e) {
+                    logger.error("Unable to initialize AIO", e);
+                }
+            }
+            this.aioContext = aioContext;
             try {
                 // It is important to use EPOLLET here as we only want to get the notification once per
                 // wakeup and don't call eventfd_read(...).
@@ -148,6 +167,13 @@ class EpollEventLoop extends SingleThreadEventLoop {
                         // ignore
                     }
                 }
+                if (aioContext != null) {
+                    try {
+                        aioContext.destroy();
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
             }
         }
     }
@@ -182,6 +208,17 @@ class EpollEventLoop extends SingleThreadEventLoop {
             datagramPacketArray.clear();
         }
         return datagramPacketArray;
+    }
+
+    public FileDescriptor epollFd() {
+        return epollFd;
+    }
+
+    /**
+     * @return the aio context, may be null if AIO is not available
+     */
+    public AIOContext aioContext() {
+        return aioContext;
     }
 
     @Override
@@ -291,7 +328,7 @@ class EpollEventLoop extends SingleThreadEventLoop {
         return new ChannelsReadOnlyIterator<AbstractEpollChannel>(ch.values());
     }
 
-    private long epollWait(long deadlineNanos) throws IOException {
+    protected long epollWait(long deadlineNanos) throws IOException {
         if (deadlineNanos == NONE) {
             return Native.epollWait(epollFd, events, timerFd,
                     Integer.MAX_VALUE, 0, EPOLL_WAIT_MILLIS_THRESHOLD); // disarm timer
@@ -302,7 +339,7 @@ class EpollEventLoop extends SingleThreadEventLoop {
         return Native.epollWait(epollFd, events, timerFd, delaySeconds, delayNanos, EPOLL_WAIT_MILLIS_THRESHOLD);
     }
 
-    private int epollWaitNoTimerChange() throws IOException {
+    protected int epollWaitNoTimerChange() throws IOException {
         return Native.epollWait(epollFd, events, false);
     }
 
@@ -446,7 +483,7 @@ class EpollEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    private void closeAll() {
+    protected void closeAll() {
         // Using the intermediate collection to prevent ConcurrentModificationException.
         // In the `close()` method, the channel is deleted from `channels` map.
         AbstractEpollChannel[] localChannels = channels.values().toArray(new AbstractEpollChannel[0]);
@@ -457,7 +494,7 @@ class EpollEventLoop extends SingleThreadEventLoop {
     }
 
     // Returns true if a timerFd event was encountered
-    private boolean processReady(EpollEventArray events, int ready) {
+    protected boolean processReady(EpollEventArray events, int ready) {
         boolean timerFired = false;
         for (int i = 0; i < ready; i ++) {
             final int fd = events.fd(i);
@@ -465,6 +502,10 @@ class EpollEventLoop extends SingleThreadEventLoop {
                 pendingWakeup = false;
             } else if (fd == timerFd.intValue()) {
                 timerFired = true;
+            } else if (aioContext != null && fd == aioContext.getEventFd().intValue()) {
+                // consume aio event
+                Native.eventFdRead(fd);
+                aioContext.processReady();
             } else {
                 final long ev = events.events(i);
 
@@ -569,6 +610,25 @@ class EpollEventLoop extends SingleThreadEventLoop {
                 datagramPacketArray = null;
             }
             events.free();
+            if (aioContext != null) {
+                aioContext.destroy();
+            }
+        }
+    }
+
+    public void toLogAsync(final InternalLogLevel level) {
+        Runnable log = new Runnable() {
+            @Override
+            public void run() {
+                logger.log(level,
+                           String.format("EpollEventLoop[epollfd: %s, eventfd: %s, timerfd: %s, aio: %s]",
+                                         epollFd, eventFd, timerFd, aioContext.toString()));
+            }
+        };
+        if (inEventLoop()) {
+            log.run();
+        } else {
+            submit(log);
         }
     }
 }

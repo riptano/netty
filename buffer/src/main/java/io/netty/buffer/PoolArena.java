@@ -697,17 +697,12 @@ abstract class PoolArena<T> extends SizeClasses implements PoolArenaMetric {
         }
 
         private static ByteBuffer allocateDirect(int capacity) {
-            return PlatformDependent.useDirectBufferNoCleaner() ?
-                    PlatformDependent.allocateDirectNoCleaner(capacity) : ByteBuffer.allocateDirect(capacity);
+            return PlatformDependent.allocateDirect(capacity);
         }
 
         @Override
         protected void destroyChunk(PoolChunk<ByteBuffer> chunk) {
-            if (PlatformDependent.useDirectBufferNoCleaner()) {
-                PlatformDependent.freeDirectNoCleaner((ByteBuffer) chunk.base);
-            } else {
-                PlatformDependent.freeDirectBuffer((ByteBuffer) chunk.base);
-            }
+            PlatformDependent.freeDirect((ByteBuffer) chunk.base);
         }
 
         @Override

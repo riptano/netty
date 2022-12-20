@@ -54,6 +54,11 @@ public final class EpollEventLoopGroup extends MultithreadEventLoopGroup {
         this(nThreads, (ThreadFactory) null);
     }
 
+    public EpollEventLoopGroup(int nThreads, AIOContext.Config aio) {
+        super(nThreads, (ThreadFactory) null, 0, DefaultSelectStrategyFactory.INSTANCE,
+              RejectedExecutionHandlers.reject(), aio);
+    }
+
     /**
      * Create a new instance using the default number of threads and the given {@link ThreadFactory}.
      */
@@ -175,16 +180,34 @@ public final class EpollEventLoopGroup extends MultithreadEventLoopGroup {
         RejectedExecutionHandler rejectedExecutionHandler = (RejectedExecutionHandler) args[2];
         EventLoopTaskQueueFactory taskQueueFactory = null;
         EventLoopTaskQueueFactory tailTaskQueueFactory = null;
+        AIOContext.Config aio = null;
 
         int argsLength = args.length;
-        if (argsLength > 3) {
-            taskQueueFactory = (EventLoopTaskQueueFactory) args[3];
-        }
-        if (argsLength > 4) {
-            tailTaskQueueFactory = (EventLoopTaskQueueFactory) args[4];
+        if (argsLength > 3 && args[3] instanceof AIOContext.Config) {
+            aio = (AIOContext.Config) args[3];
+            if (argsLength > 4) {
+                taskQueueFactory = (EventLoopTaskQueueFactory) args[4];
+            }
+            if (argsLength > 5) {
+                tailTaskQueueFactory = (EventLoopTaskQueueFactory) args[5];
+            }
+        } else {
+            if (argsLength > 3) {
+                taskQueueFactory = (EventLoopTaskQueueFactory) args[3];
+            }
+            if (argsLength > 4) {
+                if (args[4] instanceof AIOContext.Config) {
+                    aio = (AIOContext.Config) args[4];
+                } else {
+                    tailTaskQueueFactory = (EventLoopTaskQueueFactory) args[4];
+                    if (argsLength > 5) {
+                        aio = (AIOContext.Config) args[5];
+                    }
+                }
+            }
         }
         return new EpollEventLoop(this, executor, maxEvents,
                 selectStrategyFactory.newSelectStrategy(),
-                rejectedExecutionHandler, taskQueueFactory, tailTaskQueueFactory);
+                rejectedExecutionHandler, taskQueueFactory, tailTaskQueueFactory, aio);
     }
 }
