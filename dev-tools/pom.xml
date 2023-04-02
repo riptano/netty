@@ -25,7 +25,7 @@
 
   <groupId>io.netty</groupId>
   <artifactId>netty-dev-tools</artifactId>
-  <version>4.1.86.1.dse</version>
+  <version>4.1.86.1.dse-aarch64</version>
 
   <name>Netty/Dev-Tools</name>
 
