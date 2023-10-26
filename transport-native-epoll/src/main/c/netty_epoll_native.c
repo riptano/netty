@@ -15,12 +15,15 @@
  */
 #define _GNU_SOURCE
 #include <jni.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <libaio.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -212,13 +215,18 @@ static void netty_epoll_native_eventFdWrite(JNIEnv* env, jclass clazz, jint fd, 
     }
 }
 
-static void netty_epoll_native_eventFdRead(JNIEnv* env, jclass clazz, jint fd) {
+static jlong netty_epoll_native_eventFdRead(JNIEnv* env, jclass clazz, jint fd) {
     uint64_t eventfd_t;
 
-    if (eventfd_read(fd, &eventfd_t) != 0) {
-        // something is serious wrong
-        netty_unix_errors_throwRuntimeException(env, "eventfd_read() failed");
+    int err = eventfd_read(fd, &eventfd_t);
+    if (err != 0) {
+        if (errno != EAGAIN && errno != -EAGAIN){
+            // something is serious wrong
+            netty_unix_errors_throwRuntimeExceptionErrorNo(env, "eventfd_read() failed: ", errno);
+        }
+        return 0;
     }
+	return (long) eventfd_t;
 }
 
 static jint netty_epoll_native_epollCreate(JNIEnv* env, jclass clazz) {
@@ -627,6 +635,14 @@ static jint netty_epoll_native_epollerr(JNIEnv* env, jclass clazz) {
     return EPOLLERR;
 }
 
+static jint netty_epoll_native_efdnonblock(JNIEnv* env, jclass clazz) {
+    return EFD_NONBLOCK;
+}
+
+static jint netty_epoll_native_eagain(JNIEnv* env, jclass clazz) {
+    return EAGAIN;
+}
+
 static jint netty_epoll_native_sizeofEpollEvent(JNIEnv* env, jclass clazz) {
     return sizeof(struct epoll_event);
 }
@@ -671,6 +687,230 @@ static jint netty_epoll_native_registerUnix(JNIEnv* env, jclass clazz) {
     return netty_unix_register(env, staticPackagePrefix);
 }
 
+//LibAIO methods
+
+// the maximum number of buffers for a vectored IO request
+#define MAX_NUM_BUFFERS_PER_REQUEST 8
+
+typedef struct netty_iocb
+{
+    struct iocb iocb;
+    int slot; // -1 when not in use, the index in the array in netty_io_context when in use
+    struct iovec iovec[MAX_NUM_BUFFERS_PER_REQUEST]; // for vectored requests, unused otherwise
+} netty_iocb_t;
+
+typedef struct netty_io_context
+{
+    io_context_t aio;
+    int concurrency;
+    netty_iocb_t* requests;
+} netty_io_context_t;
+
+
+static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jint concurrency) {
+
+    if (concurrency <= 0 || concurrency > 1024) {
+        netty_unix_errors_throwRuntimeException(env, "invalid concurrency level, it should be > 0 and <= 1024.");
+        return JNI_ERR;
+    }
+
+    netty_io_context_t* ctx = malloc(sizeof(netty_io_context_t));
+    ctx->aio = 0;
+    ctx->concurrency = concurrency;
+    ctx->requests = calloc(concurrency, sizeof(netty_iocb_t));
+
+    int i;
+    for (i = 0; i < ctx->concurrency; i++) {
+        ctx->requests[i].slot = -1;
+    }
+
+    int r;
+    r = io_setup(concurrency, &(ctx->aio));
+    if (r != 0) {
+        netty_unix_errors_throwChannelExceptionErrorNo(env, "io_setup() failed: ", -r);
+    }
+
+    return (long) ctx;
+}
+
+static void netty_epoll_native_destroyAIOContext0(JNIEnv* env, jclass clazz, jlong ctxaddr) {
+
+    netty_io_context_t* ctx = (netty_io_context_t*) ctxaddr;
+
+    free(ctx->requests);
+    free(ctx);
+}
+
+static void netty_epoll_native_submitAIORead0(JNIEnv* env, jclass clazz, jlong ctxaddr, jint efd, jint fd,
+                                              jint num_requests, jintArray in_slots, jlongArray in_offsets, // every request has a slot, an offset
+                                              jintArray in_num_buffers, jlongArray in_buf_addresses, // a number of buffers K, K buffer addresses
+                                              jlongArray in_buf_lengths) { // and K buffer lenghts
+
+    netty_io_context_t* ctx = (netty_io_context_t*) ctxaddr;
+
+    if (num_requests <= 0 || num_requests > ctx->concurrency) {
+        netty_unix_errors_throwRuntimeException(env, "invalid number of requests, it should be > 0 and <= max concurrency.");
+        return;
+    }
+
+    int* slots = (*env)->GetIntArrayElements(env, in_slots, NULL);
+    long* offsets = (*env)->GetLongArrayElements(env, in_offsets, NULL);
+    int* num_buffers = (*env)->GetIntArrayElements(env, in_num_buffers, NULL);
+    long* buf_addresses = (*env)->GetLongArrayElements(env, in_buf_addresses, NULL);
+    long* buf_lengths = (*env)->GetLongArrayElements(env, in_buf_lengths, NULL);
+
+    int i, j;
+    int nbuffers_processed = 0;
+
+    //TODO - we could avoid this array allocation by using seq. slots or a max fixed concurrency limit
+    struct iocb** iocbps = calloc(num_requests, sizeof(struct iocb*));
+
+    //printf("Num requests: %d\n", num_requests);
+
+    for(i = 0; i < num_requests; i++) {
+
+        int slot = slots[i];
+        if (slot < 0 || slot >= ctx->concurrency) {
+            netty_unix_errors_throwRuntimeException(env, "invalid slot");
+            goto error;
+        }
+
+        //printf("Processing req. nr. %d on slot %d\n", i, slot);
+
+        netty_iocb_t* niocbp = &(ctx->requests[slot]);
+        if (niocbp->slot != -1) {
+            netty_unix_errors_throwRuntimeException(env, "selected slot already in use");
+            goto error;
+        }
+
+        niocbp->slot = slot;
+
+        struct iocb* iocbp = &niocbp->iocb;
+        iocbps[i] = iocbp;
+
+        long offset = offsets[i];
+        int nbuffers = num_buffers[i];
+        memset(niocbp->iovec, 0, sizeof(niocbp->iovec));
+
+        // TODO - see if the case nbuffers == 1 can be treated with vectored IO too
+        if (nbuffers == 1) {
+            long buf_address = buf_addresses[nbuffers_processed];
+            long length = buf_lengths[nbuffers_processed];
+
+            //printf("Processing simple req with buffer %ld of length %ld\n", buf_address, length);
+
+            if (buf_address & 511 != 0) {
+               netty_unix_errors_throwRuntimeException(env, "buffer is not memory aligned");
+               goto error;
+            }
+
+            io_prep_pread(iocbp, fd, (void *)buf_address, length, offset);
+        }
+        else {
+            if (nbuffers <= 0 || nbuffers > MAX_NUM_BUFFERS_PER_REQUEST) {
+                netty_unix_errors_throwRuntimeException(env, "invalid number of buffers, it should be > 0 and <= MAX_NUM_BUFFERS_PER_REQUEST, typically 8.");
+               goto error;
+            }
+
+            //printf("Processing vectored request with %d buffers\n", nbuffers);
+
+            for(j = 0; j < nbuffers; j++) {
+                long buf_address = buf_addresses[nbuffers_processed + j];
+                long length = buf_lengths[nbuffers_processed + j];
+
+                //printf("...buffer %ld of length %ld\n", buf_address, length);
+
+                if (buf_address & 511 != 0) {
+                    netty_unix_errors_throwRuntimeException(env, "buffer is not memory aligned");
+                    goto error;
+                }
+
+                niocbp->iovec[j].iov_base = (void *)buf_address;
+                niocbp->iovec[j].iov_len = length;
+            }
+
+            io_prep_preadv(iocbp, fd, niocbp->iovec, nbuffers, offset);
+        }
+
+        nbuffers_processed += nbuffers;
+        io_set_eventfd(iocbp, efd);
+    }
+
+    //printf("Submitting request\n");
+    int r = io_submit(ctx->aio, num_requests, iocbps);
+    if (r != num_requests) {
+        //printf("io_submit() failed with %d\n", r);
+        netty_unix_errors_throwChannelExceptionErrorNo(env, "io_submit() failed: ", -r);
+        goto error;
+    }
+
+    goto cleanup;
+
+error: // release the slots
+    for(i = 0; i < num_requests; i++) {
+        netty_iocb_t* niocbp = (netty_iocb_t *)iocbps[i];
+        if (niocbp != NULL) {
+            niocbp->slot = -1;
+        }
+    }
+
+cleanup: // release temporary arrays
+
+    free(iocbps); // can be freed after io_submit()
+
+    (*env)->ReleaseIntArrayElements(env, in_slots, slots, 0);
+    (*env)->ReleaseLongArrayElements(env, in_offsets, offsets, 0);
+    (*env)->ReleaseIntArrayElements(env, in_num_buffers, num_buffers, 0);
+    (*env)->ReleaseLongArrayElements(env, in_buf_addresses, buf_addresses, 0);
+    (*env)->ReleaseLongArrayElements(env, in_buf_lengths, buf_lengths, 0);
+}
+
+static jint netty_epoll_native_getAIOEvents0(JNIEnv* env, jclass clazz, jlong ctxaddr, jlongArray result) {
+
+    netty_io_context_t* ctx = (netty_io_context_t*) ctxaddr;
+    struct io_event events[ctx->concurrency];
+
+    struct timespec timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_nsec = 0;
+
+    int r, j, slot;
+    r = io_getevents(ctx->aio, 1, ctx->concurrency, events, &timeout);
+    //printf("io_getevents() returned %d\n", r);
+
+    if (r > 0) {
+        unsigned long resultArray[r * 2];
+        for (j = 0; j < r; ++j) {
+            struct io_event event = events[j];
+            struct netty_iocb* niocb = (netty_iocb_t *) event.obj;
+
+            slot = niocb->slot;
+            niocb->slot = -1;
+
+            //printf("slot: %d, res: %ld, res2: %ld\n", slot, (long)event.res, (long)event.res2);
+            resultArray[(int) j] = (long) slot;
+
+            if (((long)event.res2) < 0) {
+                // From what I understood by looking at inode.c, res2 will either be zero or neg.ve. It can
+                // happen that res2 signals an error with a neg.ve value but res is > 0 if there was a partial
+                // transfer of data
+                resultArray[(int) (j + r)] = (long) event.res2;
+            }
+            else {
+                // here res can be neg.ve, in which case it indicates a failure code handled java side. If it is >= 0
+                // it instead indicates the number of bytes transferred.
+                resultArray[(int) (j + r)] = (long) event.res;
+            }
+         }
+
+         (*env)->SetLongArrayRegion(env, result, 0, r * 2, resultArray);
+    } else if (r < 0) {
+       netty_unix_errors_throwChannelExceptionErrorNo(env, "io_getevents() failed: ", r);
+    }
+
+    return r;
+}
+
 // JNI Registered Methods End
 
 // JNI Method Registration Table Begin
@@ -680,6 +920,8 @@ static const JNINativeMethod statically_referenced_fixed_method_table[] = {
   { "epollout", "()I", (void *) netty_epoll_native_epollout },
   { "epollrdhup", "()I", (void *) netty_epoll_native_epollrdhup },
   { "epollerr", "()I", (void *) netty_epoll_native_epollerr },
+  { "efdnonblock", "()I", (void *) netty_epoll_native_efdnonblock },
+  { "eagain", "()I", (void *) netty_epoll_native_eagain },
   { "tcpMd5SigMaxKeyLen", "()I", (void *) netty_epoll_native_tcpMd5SigMaxKeyLen },
   { "isSupportingSendmmsg", "()Z", (void *) netty_epoll_native_isSupportingSendmmsg },
   { "isSupportingRecvmmsg", "()Z", (void *) netty_epoll_native_isSupportingRecvmmsg },
@@ -691,7 +933,7 @@ static const JNINativeMethod fixed_method_table[] = {
   { "eventFd", "()I", (void *) netty_epoll_native_eventFd },
   { "timerFd", "()I", (void *) netty_epoll_native_timerFd },
   { "eventFdWrite", "(IJ)V", (void *) netty_epoll_native_eventFdWrite },
-  { "eventFdRead", "(I)V", (void *) netty_epoll_native_eventFdRead },
+  { "eventFdRead", "(I)J", (void *) netty_epoll_native_eventFdRead },
   { "epollCreate", "()I", (void *) netty_epoll_native_epollCreate },
   { "epollWait0", "(IJIIIIJ)J", (void *) netty_epoll_native_epollWait0 },
   { "epollWait", "(IJII)I", (void *) netty_epoll_native_epollWait },
@@ -706,6 +948,10 @@ static const JNINativeMethod fixed_method_table[] = {
   { "isSupportingUdpSegment", "()Z", (void *) netty_epoll_native_isSupportingUdpSegment },
   { "registerUnix", "()I", (void *) netty_epoll_native_registerUnix },
 
+  { "createAIOContext0", "(I)J", (void *) netty_epoll_native_createAIOContext0 },
+  { "submitAIORead0", "(JIII[I[J[I[J[J)V", (void *) netty_epoll_native_submitAIORead0 },
+  { "getAIOEvents0", "(J[J)I", (void *) netty_epoll_native_getAIOEvents0 },
+  { "destroyAIOContext0", "(J)V", (void *) netty_epoll_native_destroyAIOContext0 }
 };
 static const jint fixed_method_table_size = sizeof(fixed_method_table) / sizeof(fixed_method_table[0]);
 
@@ -722,7 +968,7 @@ static JNINativeMethod* createDynamicMethodsTable(const char* packagePrefix) {
     }
     memset(dynamicMethods, 0, size);
     memcpy(dynamicMethods, fixed_method_table, sizeof(fixed_method_table));
-    
+
     JNINativeMethod* dynamicMethod = &dynamicMethods[fixed_method_table_size];
     NETTY_JNI_UTIL_PREPEND(packagePrefix, "io/netty/channel/epoll/NativeDatagramPacketArray$NativeDatagramPacket;II)I", dynamicTypeName, error);
     NETTY_JNI_UTIL_PREPEND("(IZ[L", dynamicTypeName,  dynamicMethod->signature, error);

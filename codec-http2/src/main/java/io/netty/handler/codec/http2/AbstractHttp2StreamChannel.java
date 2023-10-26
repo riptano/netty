@@ -738,6 +738,9 @@ abstract class AbstractHttp2StreamChannel extends DefaultAttributeMap implements
             promise.setSuccess();
 
             fireChannelInactiveAndDeregister(voidPromise(), wasActive);
+            if (recvHandle != null) {
+                recvHandle.channelClosed();
+            }
         }
 
         @Override

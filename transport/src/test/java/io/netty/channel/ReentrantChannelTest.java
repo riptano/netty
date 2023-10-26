@@ -25,8 +25,11 @@ import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import java.nio.channels.ClosedChannelException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -284,5 +287,55 @@ public class ReentrantChannelTest extends BaseChannelTest {
         clientChannel.closeFuture().sync();
 
         assertLog("WRITE\nCLOSE\n");
+    }
+
+    @Test
+    public void testRecvBufferAllocatorIsClosed() throws Exception {
+
+        final LocalAddress addr = new LocalAddress("testRecvBufferAllocatorIsClosed");
+        final TestRecvBufferAllocator recvBufferAllocator = new TestRecvBufferAllocator();
+
+        ServerBootstrap sb = getLocalServerBootstrap();
+        sb.bind(addr).sync().channel();
+
+        Bootstrap cb = getLocalClientBootstrap();
+        cb.option(ChannelOption.RCVBUF_ALLOCATOR, recvBufferAllocator);
+        Channel clientChannel = cb.connect(addr).sync().channel();
+
+        assertNotNull(clientChannel.unsafe().recvBufAllocHandle());
+        assertNotNull(recvBufferAllocator.handle);
+
+        clientChannel.writeAndFlush(createTestBuf(2000)).sync();
+        clientChannel.close().sync();
+
+        assertNotNull(recvBufferAllocator.handle);
+        assertTrue(recvBufferAllocator.handle.closed.get());
+    }
+
+    private static class TestRecvBufferAllocator extends DefaultMaxMessagesRecvByteBufAllocator {
+
+        public volatile TestHandle handle;
+
+        @Override
+        public TestHandle newHandle() {
+            assertNull(handle);
+            handle = new TestHandle();
+            return handle;
+        }
+
+        private class TestHandle extends DefaultMaxMessagesRecvByteBufAllocator.MaxMessageHandle {
+
+            public final AtomicBoolean closed = new AtomicBoolean();
+
+            @Override
+            public int guess() {
+                return 100;
+            }
+
+            @Override
+            public void channelClosed() {
+                closed.set(true);
+            }
+        }
     }
 }

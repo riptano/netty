@@ -105,6 +105,11 @@ public interface RecvByteBufAllocator {
          * The read has completed.
          */
         void readComplete();
+
+        /**
+         * The channel associated to this handle is closed.
+         */
+        void channelClosed();
     }
 
     @SuppressWarnings("deprecation")
@@ -183,6 +188,11 @@ public interface RecvByteBufAllocator {
         @Override
         public void readComplete() {
             delegate.readComplete();
+        }
+
+        @Override
+        public void channelClosed() {
+            delegate.channelClosed();
         }
     }
 }
