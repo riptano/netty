@@ -20,7 +20,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.100.1.dse</version>
+    <version>4.1.100.1.dse-aarch64</version>
   </parent>
 
   <artifactId>netty-testsuite-shading</artifactId>
