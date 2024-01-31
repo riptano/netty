@@ -24,3 +24,13 @@ The release script `./docker-datastax-release.sh` requires docker be installed:
 * Then run `./docker-datastax-release.sh`.
 * Follow this by releasing the MacOS specific kqueue library (must be run on MacOS):
   `./mvnw clean && JAVA_HOME=$(/usr/libexec/java_home -v 1.8) ./mvnw -B -U -pl transport-native-unix-common,transport-native-kqueue -Partifactory deploy -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.aws.dsinternal.org/artifactory/datastax-releases-local"`
+
+
+---
+
+To build and publish aarch64 variant:
+- requires `docker` and `docker-compose`
+- setup artifactory server credentials in `~/.m2/settings.xml`
+- run `docker-compose -f docker/docker-compose.centos-7.dse-aarch.yaml run cross-compile-aarch64-build-and-publish`
+
+Note the centos7.6 base image for `Dockerfile.cross_compile_aarch64` only exists for `linux/amd64`. The above `docker-compose` command will only work from a `linux/amd64` environment.
