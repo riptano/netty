@@ -26,7 +26,7 @@ import static io.netty.channel.unix.Errors.newIOException;
 import static io.netty.channel.unix.Limits.IOV_MAX;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
-import static io.netty.util.internal.PlatformDependent;
+import io.netty.util.internal.PlatformDependent;
 import static java.lang.Math.min;
 
 /**
