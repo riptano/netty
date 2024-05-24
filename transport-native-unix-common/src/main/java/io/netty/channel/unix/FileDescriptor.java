@@ -26,6 +26,7 @@ import static io.netty.channel.unix.Errors.newIOException;
 import static io.netty.channel.unix.Limits.IOV_MAX;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
+import static io.netty.util.internal.PlatformDependent;
 import static java.lang.Math.min;
 
 /**
@@ -37,12 +38,22 @@ public class FileDescriptor {
     private static final AtomicIntegerFieldUpdater<FileDescriptor> stateUpdater =
             AtomicIntegerFieldUpdater.newUpdater(FileDescriptor.class, "state");
 
+    {
+        String arch = PlatformDependent.normalizedArch();
+        if ("x86_64".equals(arch)) {
+            O_DIRECT = 040000;
+        } else if("aarch64".equals(arch)) {
+            // https://elixir.bootlin.com/linux/latest/source/arch/arm64/include/uapi/asm/fcntl.h#L25
+            O_DIRECT = 0200000;
+        }
+    }
+
     public static final int O_RDONLY = 00;
     public static final int O_WRONLY = 01;
     public static final int O_CREAT = 0100;
     public static final int O_TRUNC = 01000;
     public static final int O_APPEND = 02000;
-    public static final int O_DIRECT = 040000;
+    public static int O_DIRECT;
 
     private static final int STATE_CLOSED_MASK = 1;
     private static final int STATE_INPUT_SHUTDOWN_MASK = 1 << 1;
