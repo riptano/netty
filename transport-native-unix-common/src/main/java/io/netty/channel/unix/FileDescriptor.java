@@ -42,7 +42,7 @@ public class FileDescriptor {
         String arch = PlatformDependent.normalizedArch();
         if ("x86_64".equals(arch)) {
             O_DIRECT = 040000;
-        } else if("aarch64".equals(arch)) {
+        } else if ("aarch64".equals(arch)) {
             // https://elixir.bootlin.com/linux/latest/source/arch/arm64/include/uapi/asm/fcntl.h#L25
             O_DIRECT = 0200000;
         }
