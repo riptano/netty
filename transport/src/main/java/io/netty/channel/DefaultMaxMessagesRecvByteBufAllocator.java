@@ -164,6 +164,10 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
             attemptedBytesRead = bytes;
         }
 
+        @Override
+        public void channelClosed() {
+        }
+
         protected final int totalBytesRead() {
             return totalBytesRead < 0 ? Integer.MAX_VALUE : totalBytesRead;
         }

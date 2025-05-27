@@ -66,7 +66,7 @@ public class ByteBufAccessBenchmark extends AbstractMicrobenchmark {
         }
         @Override
         public boolean release() {
-            PlatformDependent.freeDirectBuffer(byteBuffer);
+            PlatformDependent.freeDirectWithCleaner(byteBuffer);
             return true;
         }
     }
