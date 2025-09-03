@@ -43,7 +43,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
        public void run() { } // Do nothing
     };
 
-    PriorityQueue<ScheduledFutureTask<?>> scheduledTaskQueue;
+    protected PriorityQueue<ScheduledFutureTask<?>> scheduledTaskQueue;
 
     long nextTaskId;
 
@@ -191,6 +191,15 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
     protected final boolean hasScheduledTasks() {
         ScheduledFutureTask<?> scheduledTask = peekScheduledTask();
         return scheduledTask != null && scheduledTask.deadlineNanos() <= getCurrentTimeNanos();
+    }
+
+    /**
+     * Returns {@code true} if a scheduled task is ready for processing.
+     */
+    protected final boolean hasScheduledTasks(long nanotime) {
+        Queue<ScheduledFutureTask<?>> scheduledTaskQueue = this.scheduledTaskQueue;
+        ScheduledFutureTask<?> scheduledTask = scheduledTaskQueue == null ? null : scheduledTaskQueue.peek();
+        return scheduledTask != null && scheduledTask.deadlineNanos() <= nanotime;
     }
 
     @Override
