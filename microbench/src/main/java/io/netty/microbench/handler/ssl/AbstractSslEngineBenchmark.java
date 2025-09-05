@@ -109,12 +109,12 @@ public class AbstractSslEngineBenchmark extends AbstractMicrobenchmark {
         DIRECT {
             @Override
             ByteBuffer newBuffer(int size) {
-                return ByteBuffer.allocateDirect(size);
+                return PlatformDependent.allocateDirectWithCleaner(size);
             }
 
             @Override
             void freeBuffer(ByteBuffer buffer) {
-                PlatformDependent.freeDirectBuffer(buffer);
+                PlatformDependent.freeDirectWithCleaner(buffer);
             }
         };
 
