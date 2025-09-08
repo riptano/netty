@@ -19,6 +19,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/uio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
 #include <limits.h>
 
 #include "netty_unix_errors.h"
@@ -95,10 +98,9 @@ static jint netty_unix_filedescriptor_close(JNIEnv* env, jclass clazz, jint fd) 
    return 0;
 }
 
-static jint netty_unix_filedescriptor_open(JNIEnv* env, jclass clazz, jstring path) {
+static jint netty_unix_filedescriptor_open(JNIEnv* env, jclass clazz, jstring path, jint flags) {
     const char* f_path = (*env)->GetStringUTFChars(env, path, 0);
-
-    int res = open(f_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    int res = open(f_path, flags, 0666);
     (*env)->ReleaseStringUTFChars(env, path, f_path);
 
     if (res < 0) {
@@ -261,19 +263,30 @@ static jlong netty_unix_filedescriptor_newPipe(JNIEnv* env, jclass clazz) {
     // encode the fds into a 64 bit value
     return (((jlong) fd[0]) << 32) | fd[1];
 }
+
+jlong netty_unix_filedescriptor_length(JNIEnv *env, jclass clazz, jint fd) {
+    struct stat buf;
+    if (fstat(fd, &buf) != 0) {
+         netty_unix_errors_throwIOExceptionErrorNo(env, "fstat() failed: ", errno);
+         return -1;
+    }
+    return (long) buf.st_size;
+}
+
 // JNI Registered Methods End
 
 // JNI Method Registration Table Begin
 static const JNINativeMethod method_table[] = {
   { "close", "(I)I", (void *) netty_unix_filedescriptor_close },
-  { "open", "(Ljava/lang/String;)I", (void *) netty_unix_filedescriptor_open },
+  { "open", "(Ljava/lang/String;I)I", (void *) netty_unix_filedescriptor_open },
   { "write", "(ILjava/nio/ByteBuffer;II)I", (void *) netty_unix_filedescriptor_write },
   { "writeAddress", "(IJII)I", (void *) netty_unix_filedescriptor_writeAddress },
   { "writevAddresses", "(IJI)J", (void *) netty_unix_filedescriptor_writevAddresses },
   { "writev", "(I[Ljava/nio/ByteBuffer;IIJ)J", (void *) netty_unix_filedescriptor_writev },
   { "read", "(ILjava/nio/ByteBuffer;II)I", (void *) netty_unix_filedescriptor_read },
   { "readAddress", "(IJII)I", (void *) netty_unix_filedescriptor_readAddress },
-  { "newPipe", "()J", (void *) netty_unix_filedescriptor_newPipe }
+  { "newPipe", "()J", (void *) netty_unix_filedescriptor_newPipe },
+  { "length", "(I)J", (void *) netty_unix_filedescriptor_length}
 };
 static const jint method_table_size = sizeof(method_table) / sizeof(method_table[0]);
 // JNI Method Registration Table End
