@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <dlfcn.h>
 #include <libaio.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -794,6 +795,53 @@ static jint netty_epoll_native_registerUnix(JNIEnv* env, jclass clazz) {
 
 //LibAIO methods
 
+// Dynamic loading of libaio functions
+static void* libaio_handle = NULL;
+static int (*libaio_io_setup)(int maxevents, io_context_t *ctxp) = NULL;
+static int (*libaio_io_submit)(io_context_t ctx, long nr, struct iocb *ios[]) = NULL;
+static int (*libaio_io_getevents)(io_context_t ctx_id, long min_nr, long nr, struct io_event *events, struct timespec *timeout) = NULL;
+static int (*libaio_io_destroy)(io_context_t ctx) = NULL;
+
+static int load_libaio() {
+    int i;
+    if (libaio_handle != NULL) {
+        return 0; // Already loaded
+    }
+
+    // Try different library names for compatibility
+    const char* lib_names[] = {
+        "libaio.so.1t64",  // Newer Ubuntu/Debian with time64
+        "libaio.so.1",     // Older systems
+        "libaio.so",       // Fallback
+        NULL
+    };
+
+    for (i = 0; lib_names[i] != NULL; i++) {
+        libaio_handle = dlopen(lib_names[i], RTLD_LAZY | RTLD_LOCAL);
+        if (libaio_handle != NULL) {
+            break;
+        }
+    }
+
+    if (libaio_handle == NULL) {
+        return -1;
+    }
+
+    // Load function pointers
+    libaio_io_setup = dlsym(libaio_handle, "io_setup");
+    libaio_io_submit = dlsym(libaio_handle, "io_submit");
+    libaio_io_getevents = dlsym(libaio_handle, "io_getevents");
+    libaio_io_destroy = dlsym(libaio_handle, "io_destroy");
+
+    if (!libaio_io_setup || !libaio_io_submit || !libaio_io_getevents || !libaio_io_destroy) {
+        dlclose(libaio_handle);
+        libaio_handle = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
 // the maximum number of buffers for a vectored IO request
 #define MAX_NUM_BUFFERS_PER_REQUEST 8
 
@@ -819,6 +867,12 @@ static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jin
         return JNI_ERR;
     }
 
+    // Load libaio dynamically if not already loaded
+    if (load_libaio() != 0) {
+        netty_unix_errors_throwRuntimeException(env, "Failed to load libaio library. Tried: libaio.so.1t64, libaio.so.1, libaio.so");
+        return JNI_ERR;
+    }
+
     netty_io_context_t* ctx = malloc(sizeof(netty_io_context_t));
     ctx->aio = 0;
     ctx->concurrency = concurrency;
@@ -830,7 +884,7 @@ static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jin
     }
 
     int r;
-    r = io_setup(concurrency, &(ctx->aio));
+    r = libaio_io_setup(concurrency, &(ctx->aio));
     if (r != 0) {
         netty_unix_errors_throwChannelExceptionErrorNo(env, "io_setup() failed: ", -r);
     }
@@ -942,7 +996,7 @@ static void netty_epoll_native_submitAIORead0(JNIEnv* env, jclass clazz, jlong c
     }
 
     //printf("Submitting request\n");
-    int r = io_submit(ctx->aio, num_requests, iocbps);
+    int r = libaio_io_submit(ctx->aio, num_requests, iocbps);
     if (r != num_requests) {
         //printf("io_submit() failed with %d\n", r);
         netty_unix_errors_throwChannelExceptionErrorNo(env, "io_submit() failed: ", -r);
@@ -980,7 +1034,7 @@ static jint netty_epoll_native_getAIOEvents0(JNIEnv* env, jclass clazz, jlong ct
     timeout.tv_nsec = 0;
 
     int r, j, slot;
-    r = io_getevents(ctx->aio, 1, ctx->concurrency, events, &timeout);
+    r = libaio_io_getevents(ctx->aio, 1, ctx->concurrency, events, &timeout);
     //printf("io_getevents() returned %d\n", r);
 
     if (r > 0) {
