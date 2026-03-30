@@ -50,7 +50,6 @@ import io.netty.util.concurrent.Promise;
 import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
-import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.conscrypt.OpenSSLProvider;
@@ -547,7 +546,7 @@ public abstract class SSLEngineTest {
         if (clientGroupShutdownFuture != null) {
             clientGroupShutdownFuture.sync();
         }
-        delegatingExecutor.shutdown();
+        assertTrue(delegatingExecutor.shutdownAndAwaitTermination(5, TimeUnit.SECONDS));
         serverException = null;
         clientException = null;
     }
@@ -629,11 +628,7 @@ public abstract class SSLEngineTest {
             serverEngine = wrapEngine(serverSslCtx.newEngine(UnpooledByteBufAllocator.DEFAULT));
 
             // Set the server to only support a single TLSv1.2 cipher
-            final String serverCipher =
-                    // JDK24+ does not support TLS_RSA_* ciphers by default anymore:
-                    // See https://www.java.com/en/configure_crypto.html
-                    PlatformDependent.javaVersion() >= 24 ? "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" :
-                            "TLS_RSA_WITH_AES_128_CBC_SHA";
+            final String serverCipher = "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256";
             serverEngine.setEnabledCipherSuites(new String[] { serverCipher });
 
             // Set the client to only support a single TLSv1.3 cipher
@@ -1383,9 +1378,9 @@ public abstract class SSLEngineTest {
             handshake(param.type(), param.delegate(), clientEngine, serverEngine);
 
             SSLSession session = serverEngine.getSession();
-            assertTrue(session.isValid());
+            assertTrue(session.isValid(), "session should be valid: " + session);
             session.invalidate();
-            assertFalse(session.isValid());
+            assertFalse(session.isValid(), "session should be invalid: " + session);
         } finally {
             cleanupClientSslEngine(clientEngine);
             cleanupServerSslEngine(serverEngine);
@@ -2247,11 +2242,7 @@ public abstract class SSLEngineTest {
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         // Select a mandatory cipher from the TLSv1.2 RFC https://www.ietf.org/rfc/rfc5246.txt so handshakes won't fail
         // due to no shared/supported cipher.
-        final String sharedCipher =
-                // JDK24+ does not support TLS_RSA_* ciphers by default anymore:
-                // See https://www.java.com/en/configure_crypto.html
-                PlatformDependent.javaVersion() >= 24 ? "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" :
-                "TLS_RSA_WITH_AES_128_CBC_SHA";
+        final String sharedCipher = "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256";
         clientSslCtx = wrapContext(param, SslContextBuilder.forClient()
                 .trustManager(InsecureTrustManagerFactory.INSTANCE)
                 .ciphers(Collections.singletonList(sharedCipher))
@@ -2284,11 +2275,7 @@ public abstract class SSLEngineTest {
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         // Select a mandatory cipher from the TLSv1.2 RFC https://www.ietf.org/rfc/rfc5246.txt so handshakes won't fail
         // due to no shared/supported cipher.
-        final String sharedCipher =
-                // JDK24+ does not support TLS_RSA_* ciphers by default anymore:
-                // See https://www.java.com/en/configure_crypto.html
-                PlatformDependent.javaVersion() >= 24 ? "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" :
-                        "TLS_RSA_WITH_AES_128_CBC_SHA";
+        final String sharedCipher = "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256";
         clientSslCtx = wrapContext(param, SslContextBuilder.forClient()
                 .trustManager(InsecureTrustManagerFactory.INSTANCE)
                 .ciphers(Collections.singletonList(sharedCipher), SupportedCipherSuiteFilter.INSTANCE)
@@ -4511,11 +4498,9 @@ public abstract class SSLEngineTest {
          * The JDK SSL engine master key retrieval relies on being able to set field access to true.
          * That is not available in JDK9+
          */
-        assumeFalse(sslServerProvider() == SslProvider.JDK && PlatformDependent.javaVersion() > 8);
-
-        String originalSystemPropertyValue = SystemPropertyUtil.get(SslMasterKeyHandler.SYSTEM_PROP_KEY);
-        System.setProperty(SslMasterKeyHandler.SYSTEM_PROP_KEY, Boolean.TRUE.toString());
-
+        if (sslServerProvider() == SslProvider.JDK) {
+            assumeTrue(SslMasterKeyHandler.isSunSslEngineAvailable());
+        }
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         serverSslCtx = wrapContext(param, SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
                 .sslProvider(sslServerProvider())
@@ -4542,6 +4527,12 @@ public abstract class SSLEngineTest {
 
                     ch.pipeline().addLast(sslHandler);
                     ch.pipeline().addLast(new SslMasterKeyHandler() {
+
+                        @Override
+                        protected boolean masterKeyHandlerEnabled() {
+                            return true;
+                        }
+
                         @Override
                         protected void accept(SecretKey masterKey, SSLSession session) {
                             promise.setSuccess(masterKey);
@@ -4565,11 +4556,6 @@ public abstract class SSLEngineTest {
             assertEquals(48, key.getEncoded().length, "AES secret key must be 48 bytes");
         } finally {
             closeQuietly(socket);
-            if (originalSystemPropertyValue != null) {
-                System.setProperty(SslMasterKeyHandler.SYSTEM_PROP_KEY, originalSystemPropertyValue);
-            } else {
-                System.clearProperty(SslMasterKeyHandler.SYSTEM_PROP_KEY);
-            }
         }
     }
 

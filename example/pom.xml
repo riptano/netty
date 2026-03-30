@@ -21,7 +21,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.128.1.dse</version>
+    <version>4.1.132.1.dse</version>
   </parent>
 
   <artifactId>netty-example</artifactId>
@@ -32,6 +32,7 @@
   <properties>
     <japicmp.skip>true</japicmp.skip>
     <javaModuleName>io.netty.example</javaModuleName>
+    <revapi.skip>true</revapi.skip>
   </properties>
   <dependencies>
     <dependency>

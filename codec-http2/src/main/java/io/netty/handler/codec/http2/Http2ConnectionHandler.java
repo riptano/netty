@@ -248,6 +248,10 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
                     byteDecoder.decode(ctx, in, out);
                 }
             } catch (Throwable e) {
+                if (byteDecoder != null) {
+                    // Skip all bytes before we report the exception as
+                    in.skipBytes(in.readableBytes());
+                }
                 onError(ctx, false, e);
             }
         }
@@ -256,13 +260,6 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
         public void channelActive(ChannelHandlerContext ctx) throws Exception {
             // The channel just became active - send the connection preface to the remote endpoint.
             sendPreface(ctx);
-
-            if (flushPreface) {
-                // As we don't know if any channelReadComplete() events will be triggered at all we need to ensure we
-                // also flush. Otherwise the remote peer might never see the preface / settings frame.
-                // See https://github.com/netty/netty/issues/12089
-                ctx.flush();
-            }
         }
 
         @Override
@@ -346,11 +343,16 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
             }
 
             short frameType = in.getUnsignedByte(in.readerIndex() + 3);
-            short flags = in.getUnsignedByte(in.readerIndex() + 4);
-            if (frameType != SETTINGS || (flags & Http2Flags.ACK) != 0) {
+            if (frameType != SETTINGS) {
                 throw connectionError(PROTOCOL_ERROR, "First received frame was not SETTINGS. " +
                                                       "Hex dump for first 5 bytes: %s",
                                       hexDump(in, in.readerIndex(), 5));
+            }
+            short flags = in.getUnsignedByte(in.readerIndex() + 4);
+            if ((flags & Http2Flags.ACK) != 0) {
+                throw connectionError(PROTOCOL_ERROR, "First received frame was SETTINGS frame but had ACK flag set. " +
+                        "Hex dump for first 5 bytes: %s",
+                        hexDump(in, in.readerIndex(), 5));
             }
             return true;
         }
@@ -375,11 +377,20 @@ public class Http2ConnectionHandler extends ByteToMessageDecoder implements Http
             encoder.writeSettings(ctx, initialSettings, ctx.newPromise()).addListener(
                     ChannelFutureListener.CLOSE_ON_FAILURE);
 
-            if (isClient) {
-                // If this handler is extended by the user and we directly fire the userEvent from this context then
-                // the user will not see the event. We should fire the event starting with this handler so this class
-                // (and extending classes) have a chance to process the event.
-                userEventTriggered(ctx, Http2ConnectionPrefaceAndSettingsFrameWrittenEvent.INSTANCE);
+            try {
+                if (isClient) {
+                    // If this handler is extended by the user and we directly fire the userEvent from this context then
+                    // the user will not see the event. We should fire the event starting with this handler so this
+                    // class (and extending classes) have a chance to process the event.
+                    userEventTriggered(ctx, Http2ConnectionPrefaceAndSettingsFrameWrittenEvent.INSTANCE);
+                }
+            } finally {
+                if (flushPreface) {
+                    // As we don't know if any channelReadComplete() events will be triggered at all we need to ensure
+                    // we also flush. Otherwise the remote peer might never see the preface / settings frame.
+                    // See https://github.com/netty/netty/issues/12089
+                    ctx.flush();
+                }
             }
         }
     }
