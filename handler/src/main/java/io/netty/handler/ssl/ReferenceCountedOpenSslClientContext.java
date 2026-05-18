@@ -73,7 +73,8 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
         try {
             sessionContext = newSessionContext(this, ctx, engineMap, trustCertCollection, trustManagerFactory,
                                                keyCertChain, key, keyPassword, keyManagerFactory, keyStore,
-                                               sessionCacheSize, sessionTimeout, resumptionController);
+                                               sessionCacheSize, sessionTimeout, endpointIdentificationAlgorithm,
+                                               resumptionController, options);
             success = true;
         } finally {
             if (!success) {
@@ -94,7 +95,9 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
                                                    X509Certificate[] keyCertChain, PrivateKey key,
                                                    String keyPassword, KeyManagerFactory keyManagerFactory,
                                                    String keyStore, long sessionCacheSize, long sessionTimeout,
-                                                   ResumptionController resumptionController)
+                                                   String endpointIdentificationAlgorithm,
+                                                   ResumptionController resumptionController,
+                                                   Map.Entry<SslContextOption<?>, Object>... options)
             throws SSLException {
         if (key == null && keyCertChain != null || key != null && keyCertChain == null) {
             throw new IllegalArgumentException(
@@ -155,8 +158,11 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
                             TrustManagerFactory.getDefaultAlgorithm());
                     trustManagerFactory.init((KeyStore) null);
                 }
-                final X509TrustManager manager = chooseTrustManager(
-                        trustManagerFactory.getTrustManagers(), resumptionController);
+                final boolean sanPeerIdentityLookup = isSanPeerIdentityLookupEnabled(
+                        endpointIdentificationAlgorithm, options);
+                final X509TrustManager manager = wrapTrustManagerIfNeeded(
+                        chooseTrustManager(trustManagerFactory.getTrustManagers(), resumptionController),
+                        sanPeerIdentityLookup);
 
                 // IMPORTANT: The callbacks set for verification must be static to prevent memory leak as
                 //            otherwise the context can never be collected. This is because the JNI code holds
@@ -202,6 +208,37 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
         } else {
             SSLContext.setCertVerifyCallback(ctx, new TrustManagerVerifyCallback(engineMap, manager));
         }
+    }
+
+    private static boolean isSanPeerIdentityLookupEnabled(String endpointIdentificationAlgorithm,
+                                                          Map.Entry<SslContextOption<?>, Object>[] options) {
+        if (endpointIdentificationAlgorithm == null) {
+            return false;
+        }
+        if (options == null) {
+            return false;
+        }
+        for (Map.Entry<SslContextOption<?>, Object> option : options) {
+            if (option == null) {
+                continue;
+            }
+            if (SanPeerIdentityConfig.SAN_PEER_IDENTITY_LOOKUP.equals(option.getKey())) {
+                return Boolean.TRUE.equals(option.getValue());
+            }
+        }
+        return false;
+    }
+
+    @SuppressJava6Requirement(reason = "Usage guarded by java version check")
+    private static X509TrustManager wrapTrustManagerIfNeeded(X509TrustManager manager,
+                                                             boolean sanPeerIdentityLookup) {
+        if (!sanPeerIdentityLookup) {
+            return manager;
+        }
+        if (useExtendedTrustManager(manager)) {
+            return new SanPeerIdentityTrustManager((X509ExtendedTrustManager) manager);
+        }
+        return manager;
     }
 
     static final class OpenSslClientSessionContext extends OpenSslSessionContext {
