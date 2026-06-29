@@ -7,7 +7,7 @@ on:
   # Trigger on version tags
   push:
     branches:
-      - dse-netty-4.1.132
+      - dse-netty-4.1.135
     tags:
       - '*.dse'
       - 'dse-netty-*'
