@@ -69,58 +69,98 @@ The commit message format must follow the established convention used in
 previous merges on this repository (e.g. commit `f22f5ae6aa` for
 `netty-4.1.132.Final`).
 
-### 5. Resolve conflicts if any
+**Expect the merge to stop with conflicts every time.** This is normal — every
+merge of a new upstream tag into a DSE fork branch will produce conflicts
+because of DSE-specific patches and version numbers. Proceed directly to
+step 5.
 
-If there are merge conflicts, git will pause. Do **not** ask the user — resolve
-them autonomously using the following rules:
+### 5. Resolve all conflicts
 
-1. **Read every conflicting file** using `read_file` to understand both sides
-   of each conflict (the `<<<<<<< HEAD` / local side and the `>>>>>>> <TAG>` /
-   upstream side).
-2. **Keep the local (HEAD) change** whenever the conflict touches code that was
-   introduced by a DSE-specific patch (i.e. it does not exist in the upstream
-   tag at all, or it is a deliberate override of upstream behaviour).
-3. **Keep the upstream change** only when the local side is identical to the
-   previous upstream base and carries no DSE-specific intent (e.g. a plain
-   version bump or a whitespace-only difference that the DSE branch never
-   intentionally modified).
-4. **Merge both sides** when the upstream adds new logic and the local side
-   also adds independent logic to the same region — integrate them so neither
-   is lost.
-5. After editing each file to its resolved state, write it back with
-   `apply_diff` or `write_file`, then stage it:
+Run the following to see every conflicting file:
+
+```bash
+git diff --name-only --diff-filter=U
+```
+
+Work through each file. Do **not** ask the user — resolve them autonomously
+using the rules below.
+
+#### 5a. `pom.xml` conflicts — always keep the DSE version
+
+Every `pom.xml` file will conflict on the `<version>` element because upstream
+uses a plain `.Final` version while the DSE branch uses the `.1.dse` suffix.
+
+**Rule:** In every `pom.xml` conflict, always accept the **HEAD (DSE) side**
+for the `<version>` element. The resolved value must be the DSE version string
+(e.g. `4.1.133.1.dse`), **never** the bare upstream value (e.g. `4.1.133.Final`).
+
+For all other content in the same `pom.xml` (dependency versions, plugin
+config, etc.) apply the general rules from §5b below.
+
+After resolving each `pom.xml`, stage it:
+
+```bash
+git add <path/to/pom.xml>
+```
+
+#### 5b. Code file conflicts — always preserve DSE changes
+
+For every non-`pom.xml` conflict:
+
+1. **Read the conflicting file** using `read_file` to understand both sides
+   (`<<<<<<< HEAD` = local/DSE side, `>>>>>>> <TAG>` = upstream side).
+2. Apply the following priority rules in order:
+   - **Keep the DSE (HEAD) change** whenever the conflict region contains code
+     that was introduced or modified by a DSE-specific patch (i.e. it does not
+     exist in the upstream tag at all, or it is a deliberate override of
+     upstream behaviour). DSE changes must never be silently dropped.
+   - **Keep the upstream change** only when the local side is byte-for-byte
+     identical to the previous upstream base and carries no DSE-specific intent
+     (e.g. an import that was moved, a purely mechanical refactor, or a
+     whitespace-only difference that the DSE branch never intentionally touched).
+   - **Merge both sides** when the upstream adds new logic _and_ the local side
+     also adds independent logic to the same region — integrate them carefully
+     so neither is lost.
+3. After resolving, write the file back with `apply_diff` or `write_file` so
+   it contains no conflict markers, then stage it:
 
 ```bash
 git add <resolved-file>
 ```
 
-6. Once all conflicts are staged, complete the merge:
+#### 5c. Complete the merge
+
+Once every conflicting file has been staged, finalize the merge commit:
 
 ```bash
 git merge --continue
 ```
 
-### 6. Update the project version to the DSE version
+If `git merge --continue` opens an editor, the pre-filled message is already
+correct (it was passed in step 4); just accept it as-is.
 
-After the merge the root `<version>` in every `pom.xml` will be set to the
-upstream value (e.g. `4.1.132.Final`). Update it to the DSE version by
-appending the `.1.dse` suffix:
+### 6. Verify pom.xml versions are consistent
+
+After the merge commit is created, double-check that all `pom.xml` files carry
+the correct DSE version and not the upstream version:
 
 ```bash
-mvn versions:set -DnewVersion=<VERSION>.1.dse -DgenerateBackupPoms=false
+grep -r "<version>" --include="pom.xml" . | grep -v "\.1\.dse" | grep -v "target/"
 ```
 
-- `<VERSION>` — the numeric part of the tag without the `.Final` suffix
-  (e.g. for `netty-4.1.133.Final` use `4.1.133`).
+If any `pom.xml` still contains the bare upstream version (e.g. `4.1.133.Final`
+instead of `4.1.133.1.dse`), amend them and stage + commit the fix:
+
+```bash
+# Fix remaining pom.xml files that slipped through conflict resolution
+mvn versions:set -DnewVersion=<DSE_VERSION> -DgenerateBackupPoms=false
+git add -u
+git commit -m "Update version to <DSE_VERSION>"
+```
+
+- `<DSE_VERSION>` — the full DSE version string, e.g. `4.1.133.1.dse`.
 - `-DgenerateBackupPoms=false` avoids leaving `pom.xml.versionsBackup` files
   behind.
-
-Commit the result:
-
-```bash
-git add -u
-git commit -m "Update version to <VERSION>.1.dse"
-```
 
 ### 7. Verify the result
 
@@ -128,8 +168,8 @@ git commit -m "Update version to <VERSION>.1.dse"
 git log --oneline --graph -10
 ```
 
-Confirm the merge commit and the version-bump commit are both at the HEAD,
-and that both parent lines of the merge are visible.
+Confirm the merge commit is at the HEAD and that both parent lines of the
+merge are visible.
 
 ### 8. Push
 
