@@ -68,6 +68,7 @@ import org.apache.directory.server.dns.store.DnsAttribute;
 import org.apache.directory.server.dns.store.RecordStore;
 import org.apache.mina.core.buffer.IoBuffer;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -111,7 +112,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import static io.netty.handler.codec.dns.DnsRecordType.A;
 import static io.netty.handler.codec.dns.DnsRecordType.AAAA;
@@ -858,6 +861,46 @@ public class DnsNameResolverTest {
         assumeThat(WINDOWS_HOSTS_FILE_HOST_NAME_ENTRY_EXISTS).isFalse();
         assumeThat(DEFAULT_RESOLVE_ADDRESS_TYPES).isEqualTo(ResolvedAddressTypes.IPV6_PREFERRED);
         testResolve0(strategy, ResolvedAddressTypes.IPV6_ONLY, NetUtil.LOCALHOST6, WINDOWS_HOST_NAME);
+    }
+
+    private static List<Object[]> testResolveLocalhostWithoutDNSArgs() {
+        DnsNameResolverChannelStrategy[] strategies = DnsNameResolverChannelStrategy.values();
+        List<String> names = asList("localhost", "localhost.", "test.localhost", "TEsT.LOCalhost", "test.localhost.");
+
+        List<Object[]> output = new ArrayList<Object[]>();
+        for (DnsNameResolverChannelStrategy strategy : strategies) {
+            for (String name : names) {
+                output.add(new Object[] { strategy, ResolvedAddressTypes.IPV4_ONLY, NetUtil.LOCALHOST4, name });
+                output.add(new Object[] { strategy, ResolvedAddressTypes.IPV6_ONLY, NetUtil.LOCALHOST6, name });
+            }
+        }
+
+        return output;
+    }
+
+    @ParameterizedTest
+    @MethodSource("testResolveLocalhostWithoutDNSArgs")
+    public void testResolveLocalhostWithoutDNSOrHostsFile(DnsNameResolverChannelStrategy strategy,
+                                                          ResolvedAddressTypes addressTypes, InetAddress expectedAddr,
+                                                          String name) {
+        DnsNameResolver resolver = newResolver(strategy, addressTypes)
+                .hostsFileEntriesResolver(new HostsFileEntriesResolver() {
+                    @Override
+                    public InetAddress address(String inetHost, ResolvedAddressTypes resolvedAddressTypes) {
+                        // The hosts file should not be required to resolve localhost addresses.
+                        return null;
+                    }
+                })
+                .build();
+        try {
+            InetAddress address = resolver.resolve(name).syncUninterruptibly().getNow();
+            assertEquals(expectedAddr, address);
+
+            // We are resolving the local address, so we shouldn't make any queries.
+            assertNoQueriesMade(resolver);
+        } finally {
+            resolver.close();
+        }
     }
 
     @ParameterizedTest
@@ -3492,8 +3535,8 @@ public class DnsNameResolverTest {
                 serverSocket.close();
                 if (i == 10) {
                     // We tried 10 times without success
-                    throw new IllegalStateException(
-                            "Unable to bind TestDnsServer and ServerSocket to the same address", e);
+                    Assumptions.abort("Unable to bind TestDnsServer and ServerSocket to the same address: " +
+                            e.getMessage());
                 }
                 // We could not start the DnsServer which is most likely because the localAddress was already used,
                 // let's retry

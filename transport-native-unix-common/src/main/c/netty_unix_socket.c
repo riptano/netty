@@ -133,11 +133,23 @@ done:
     return obj;
 }
 
-static jobject createDomainDatagramSocketAddress(JNIEnv* env, const struct sockaddr_storage* addr, int len, jobject local) {
+static int domainSocketPathLength(const struct sockaddr_un* s, const socklen_t addrlen) {
+#ifdef __linux__
+    // Linux supports abstract domain sockets so we need to handle it.
+    // https://man7.org/linux/man-pages/man7/unix.7.html
+    if (addrlen >= sizeof(sa_family_t) && s->sun_path[0] == '\0') {
+       // This is an abstract domain socket address
+       return (addrlen - sizeof(sa_family_t));
+    }
+#endif
+    return strlen(s->sun_path);
+}
+
+static jobject createDomainDatagramSocketAddress(JNIEnv* env, const struct sockaddr_storage* addr, const socklen_t addrlen, int len, jobject local) {
     jclass domainDatagramSocketAddressClass = NULL;
     jobject obj  = NULL;
     struct sockaddr_un* s = (struct sockaddr_un*) addr;
-    int pathLength = strlen(s->sun_path);
+    int pathLength = domainSocketPathLength(s, addrlen);
     jbyteArray pathBytes = (*env)->NewByteArray(env, pathLength);
     if (pathBytes == NULL) {
         return NULL;
@@ -157,9 +169,9 @@ done:
     return obj;
 }
 
-static jbyteArray netty_unix_socket_createDomainSocketAddressArray(JNIEnv* env, const struct sockaddr_storage* addr) {
+static jbyteArray netty_unix_socket_createDomainSocketAddressArray(JNIEnv* env, const struct sockaddr_storage* addr, const socklen_t addrlen) {
     struct sockaddr_un* s = (struct sockaddr_un*) addr;
-    int pathLength = strlen(s->sun_path);
+    int pathLength = domainSocketPathLength(s, addrlen);
     jbyteArray pathBytes = (*env)->NewByteArray(env, pathLength);
     if (pathBytes == NULL) {
         return NULL;
@@ -446,7 +458,7 @@ static jobject _recvFromDomainSocket(JNIEnv* env, jint fd, void* buffer, jint po
     int err;
 
     do {
-        bzero(&addr, sizeof(addr)); // Zap addr so we can strlen(addr.sun_path) later. See unix(4).
+        memset(&addr, 0, sizeof(addr)); // Zap addr so we can strlen(addr.sun_path) later. See unix(4).
         res = recvfrom(fd, buffer + pos, (size_t) (limit - pos), 0, (struct sockaddr*) &addr, &addrlen);
         // Keep on reading if it was interrupted
     } while (res == -1 && ((err = errno) == EINTR));
@@ -464,7 +476,7 @@ static jobject _recvFromDomainSocket(JNIEnv* env, jint fd, void* buffer, jint po
         return NULL;
     }
 
-    return createDomainDatagramSocketAddress(env, &addr, res, NULL);
+    return createDomainDatagramSocketAddress(env, &addr, addrlen, res, NULL);
 }
 
 static jint _send(JNIEnv* env, jclass clazz, jint fd, void* buffer, jint pos, jint limit) {
@@ -687,8 +699,10 @@ static jint netty_unix_socket_accept(JNIEnv* env, jclass clazz, jint fd, jbyteAr
     if (accept4)  {
         return socketFd;
     }
+    // accept4 was not present so need two more sys-calls ...
     if (fcntl(socketFd, F_SETFD, FD_CLOEXEC) == -1 || fcntl(socketFd, F_SETFL, O_NONBLOCK) == -1) {
-        // accept4 was not present so need two more sys-calls ...
+        // close the fd before report the error so we don't leak it.
+        close(socketFd);
         return -errno;
     }
     return socketFd;
@@ -709,7 +723,7 @@ static jbyteArray netty_unix_socket_remoteDomainSocketAddress(JNIEnv* env, jclas
     if (getpeername(fd, (struct sockaddr*) &addr, &len) == -1) {
         return NULL;
     }
-    return netty_unix_socket_createDomainSocketAddressArray(env, &addr);
+    return netty_unix_socket_createDomainSocketAddressArray(env, &addr, len);
 }
 
 static jbyteArray netty_unix_socket_localAddress(JNIEnv* env, jclass clazz, jint fd) {
@@ -727,7 +741,7 @@ static jbyteArray netty_unix_socket_localDomainSocketAddress(JNIEnv* env, jclass
     if (getsockname(fd, (struct sockaddr*) &addr, &len) == -1) {
         return NULL;
     }
-    return netty_unix_socket_createDomainSocketAddressArray(env, &addr);
+    return netty_unix_socket_createDomainSocketAddressArray(env, &addr, len);
 }
 
 static jint netty_unix_socket_newSocketDgramFd(JNIEnv* env, jclass clazz, jboolean ipv6) {
