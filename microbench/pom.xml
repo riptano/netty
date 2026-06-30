@@ -20,7 +20,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.128.1.dse</version>
+    <version>4.1.135.1.dse</version>
   </parent>
 
   <artifactId>netty-microbench</artifactId>
@@ -223,6 +223,13 @@
           <excludes>
             <exclude>**/Http2FrameWriterBenchmark.java</exclude>
           </excludes>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.openjdk.jmh</groupId>
+              <artifactId>jmh-generator-annprocess</artifactId>
+              <version>${jmh.version}</version>
+            </path>
+          </annotationProcessorPaths>
         </configuration>
       </plugin>
       <plugin>

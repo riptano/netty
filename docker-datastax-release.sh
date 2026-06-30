@@ -12,4 +12,4 @@ if ! which docker > /dev/null ; then
 fi
 
 sudo docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
-sudo docker run -t --network host -v ~/.m2:/root/.m2:Z -v ~/.ssh:/root/.ssh:Z -v ~/.gnupg:/root/.gnupg:Z -v `pwd`:/code:Z -w /code --entrypoint="" netty-centos6 bash -ic "./mvnw -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"artifactory::default::https://repo.aws.dsinternal.org/artifactory/datastax-releases-local\""
+sudo docker run -t --network host -v ~/.m2:/root/.m2:Z -v ~/.ssh:/root/.ssh:Z -v ~/.gnupg:/root/.gnupg:Z -v `pwd`:/code:Z -w /code --entrypoint="" netty-centos6 bash -ic "./mvnw -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository=\"artifactory::default::https://maven.pkg.github.com/riptano/netty\""

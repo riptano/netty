@@ -1,0 +1,306 @@
+name: Build and Publish DataStax Netty to GitHub Packages
+
+on:
+  # Allows manual trigger from the Actions tab
+  workflow_dispatch:
+
+  # Trigger on version tags
+  push:
+    branches:
+      - dse-netty-4.1.135
+    tags:
+      - '*.dse'
+      - 'dse-netty-*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryhandler.count=5 -Dmaven.wagon.httpconnectionManager.ttlSeconds=240
+
+# Cancel running jobs when a new push happens to the same branch/tag
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Stage 1: Build full Netty library on Linux x64
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    name: Build Linux x86_64 (Full)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache .m2/repository
+      - name: Cache local Maven repository
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.m2/repository
+          key: cache-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            cache-maven-${{ hashFiles('**/pom.xml') }}
+            cache-maven-
+
+      - name: Configure Maven settings for Docker
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>${env.GITHUB_ACTOR}</username>
+                <password>${env.GITHUB_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create local staging directory
+        run: mkdir -p ~/local-staging
+
+      - name: Build docker image
+        run: docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
+
+      - name: Build and stage artifacts
+        run: |
+          docker run -t \
+            -v ~/.m2:/root/.m2:Z \
+            -v ~/local-staging:/root/local-staging:Z \
+            -v $(pwd):/code:Z \
+            -w /code \
+            --entrypoint="" \
+            netty-centos6 \
+            bash -ic "./mvnw -B clean install -DskipTests=true ; ./mvnw -B deploy -DaltDeploymentRepository=local-staging::default::file:///root/local-staging -DskipTests=true"
+
+      - name: Upload local staging directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-local-staging
+          path: ~/local-staging
+          if-no-files-found: error
+          include-hidden-files: true
+
+  # Stage 2: Build macOS Intel x86_64 native libraries
+  build-macos-intel:
+    runs-on: macos-15-intel
+    name: Build macOS x86_64 (Native Libraries)
+    needs: [build-linux-x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      # Cache .m2/repository
+      - name: Cache local Maven repository
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.m2/repository
+          key: cache-maven-macos-intel-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            cache-maven-macos-intel-${{ hashFiles('**/pom.xml') }}
+            cache-maven-
+
+      - name: Install tools via brew
+        run: brew bundle
+        continue-on-error: true
+
+      - name: Create local staging directory
+        run: mkdir -p ~/local-staging
+
+      - name: Build and stage native libraries
+        run: |
+          echo "$(pwd)"
+          ./mvnw -B -U \
+            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
+            deploy \
+            -DskipTests \
+            -DaltDeploymentRepository=local-staging::default::file:///$(pwd)/local-staging
+          find $(pwd)/local-staging
+          find ~/local-staging
+
+      - name: Upload local staging directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64-local-staging
+          path: ${{ github.workspace }}/local-staging
+          if-no-files-found: error
+          include-hidden-files: true
+
+  # Stage 3: Build macOS ARM aarch64 native libraries
+  build-macos-arm:
+    runs-on: macos-15
+    name: Build macOS aarch64 (Native Libraries)
+    needs: [build-linux-x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      # Cache .m2/repository
+      - name: Cache local Maven repository
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.m2/repository
+          key: cache-maven-macos-arm-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            cache-maven-macos-arm-${{ hashFiles('**/pom.xml') }}
+            cache-maven-
+
+      - name: Install tools via brew
+        run: brew bundle
+        continue-on-error: true
+
+      - name: Create local staging directory
+        run: mkdir -p ~/local-staging
+
+      - name: Build and stage native libraries
+        run: |
+          echo "$(pwd)"
+          ./mvnw -B -Pmac-m1-cross-compile deploy \
+            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
+            -DskipTests \
+            -DaltDeploymentRepository=local-staging::default::file:///$(pwd)/local-staging
+          find $(pwd)/local-staging
+          find ~/local-staging
+
+      - name: Upload local staging directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64-local-staging
+          path: ${{ github.workspace }}/local-staging
+          if-no-files-found: error
+          include-hidden-files: true
+
+  # Stage 4: Merge artifacts and publish to GitHub Packages
+  publish-to-github-packages:
+    runs-on: ubuntu-latest
+    name: Merge and Publish to GitHub Packages
+    needs: [build-linux-x64, build-macos-intel, build-macos-arm]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      # Cache .m2/repository
+      - name: Cache local Maven repository
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.m2/repository
+          key: cache-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            cache-maven-${{ hashFiles('**/pom.xml') }}
+            cache-maven-
+
+      # Configure Maven settings for GitHub Packages
+      - name: Configure Maven settings
+        uses: s4u/maven-settings-action@v3.0.0
+        with:
+          servers: |
+            [{
+              "id": "github",
+              "username": "${{ github.actor }}",
+              "password": "${{ secrets.GITHUB_TOKEN }}"
+            },
+            {
+              "id": "central-portal-snapshots",
+              "username": "${{ github.actor }}",
+              "password": "${{ secrets.GITHUB_TOKEN }}"
+            }]
+
+      # Setup environment variables
+      - name: Prepare environment variables
+        run: |
+          echo "LOCAL_STAGING_DIR=$HOME/local-staging" >> $GITHUB_ENV
+
+      # Download all staging artifacts
+      - name: Download Linux x86_64 staging directory
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64-local-staging
+          path: ~/linux-x86_64-local-staging
+
+      - name: Download macOS x86_64 staging directory
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x86_64-local-staging
+          path: ~/macos-x86_64-local-staging
+
+      - name: Download macOS aarch64 staging directory
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-aarch64-local-staging
+          path: ~/macos-aarch64-local-staging
+
+      # Install artifacts to local Maven repository
+      - name: Copy build artifacts to local maven repository
+        run: |
+          bash ./.github/scripts/local_staging_install_release.sh \
+            ~/.m2/repository \
+            ~/linux-x86_64-local-staging \
+            ~/macos-x86_64-local-staging \
+            ~/macos-aarch64-local-staging
+
+      # Generate netty-all and install to local Maven repository
+      - name: Generate netty-all
+        run: |
+          ./mvnw -B --file pom.xml -pl all \
+            clean install \
+            -DskipTests=true
+
+      # Merge all staging repositories
+      - name: Merge staging repositories
+        run: |
+          bash ./.github/scripts/local_staging_install_release.sh \
+            ~/local-staging \
+            ~/linux-x86_64-local-staging \
+            ~/macos-x86_64-local-staging \
+            ~/macos-aarch64-local-staging
+
+            # Copy netty-all from local Maven repository
+            if [ -d "$HOME/.m2/repository/io/netty/netty-all" ]; then
+              cp -r $HOME/.m2/repository/io/netty/netty-all $HOME/local-staging/io/netty/
+            fi
+
+      # Deploy to GitHub Packages
+      - name: Deploy to GitHub Packages
+        run: |
+          ./mvnw -B --file pom.xml \
+            org.sonatype.plugins:nexus-staging-maven-plugin:deploy-staged \
+            -DaltStagingDirectory=$HOME/local-staging \
+            -DserverId=github \
+            -DnexusUrl=https://maven.pkg.github.com/${{ github.repository }} \
+            -DrepositoryId=github
+
+      - name: Upload merged staging directory (for debugging)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged-local-staging
+          path: ~/local-staging
+          if-no-files-found: warn
+          include-hidden-files: true

@@ -26,7 +26,6 @@ import io.netty.handler.codec.PrematureChannelClosureException;
 import io.netty.util.AsciiString;
 import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.mockito.Mockito;
@@ -757,5 +756,35 @@ public class HttpObjectAggregatorTest {
                 ch.finish();
             }
         });
+    }
+
+    @Test
+    public void invalidContinueLength() {
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpServerCodec(), new HttpObjectAggregator(1024));
+
+        channel.writeInbound(Unpooled.copiedBuffer("POST / HTTP/1.1\r\n" +
+                "Expect: 100-continue\r\n" +
+                "Content-Length:\r\n" +
+                "\r\n\r\n", CharsetUtil.US_ASCII));
+        assertTrue(channel.finishAndReleaseAll());
+    }
+
+    @Test
+    public void testOversizedRequestWithAutoReadFalse() {
+        EmbeddedChannel embedder = new EmbeddedChannel(new HttpRequestDecoder(), new HttpObjectAggregator(4));
+        embedder.config().setAutoRead(false);
+        assertFalse(embedder.writeInbound(Unpooled.copiedBuffer(
+                "PUT /upload HTTP/1.1\r\n"
+                + "Content-Length: 5\r\n\r\n", CharsetUtil.US_ASCII)));
+
+        assertNull(embedder.readInbound());
+
+        FullHttpResponse response = embedder.readOutbound();
+        assertEquals(HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE, response.status());
+        assertEquals("0", response.headers().get(HttpHeaderNames.CONTENT_LENGTH));
+        ReferenceCountUtil.release(response);
+
+        assertFalse(embedder.isOpen());
+        assertFalse(embedder.finish());
     }
 }
