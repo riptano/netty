@@ -76,6 +76,8 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
      * @param listener the delegate listener used by {@link Http2FrameListenerDecorator}
      * @param maxAllocation maximum size of the decompression buffer. Must be &gt;= 0.
      *                      If zero, maximum size is not limited by decoder.
+     *                      Some compression codecs will output buffers up to 64 KiB in size,
+     *                      even if {@code maxAllocation} is configured lower.
      */
     public DelegatingDecompressorFrameListener(Http2Connection connection, Http2FrameListener listener,
                                                int maxAllocation) {
@@ -108,6 +110,8 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
      *               otherwise the decoder can fallback to {@link ZlibWrapper#NONE}
      * @param maxAllocation maximum size of the decompression buffer. Must be &gt;= 0.
      *                      If zero, maximum size is not limited by decoder.
+     *                      Some compression codecs will output buffers up to 64 KiB in size,
+     *                      even if {@code maxAllocation} is configured lower.
      */
     public DelegatingDecompressorFrameListener(Http2Connection connection, Http2FrameListener listener,
                     boolean strict, int maxAllocation) {
@@ -177,7 +181,7 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
         }
         if (Brotli.isAvailable() && BR.contentEqualsIgnoreCase(contentEncoding)) {
             return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-              ctx.channel().config(), new BrotliDecoder());
+              ctx.channel().config(), new BrotliDecoder(maxAllocation));
         }
         if (SNAPPY.contentEqualsIgnoreCase(contentEncoding)) {
             return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
@@ -185,7 +189,7 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
         }
         if (Zstd.isAvailable() && ZSTD.contentEqualsIgnoreCase(contentEncoding)) {
             return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), new ZstdDecoder());
+                    ctx.channel().config(), new ZstdDecoder(maxAllocation));
         }
         // 'identity' or unsupported
         return null;
@@ -361,16 +365,22 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
                         buf.release();
                         return;
                     }
-                    incrementDecompressedBytes(buf.readableBytes());
-                    // Immediately return the bytes back to the flow controller. ConsumedBytesConverter will convert
-                    // from the decompressed amount which the user knows about to the compressed amount which flow
-                    // control knows about.
-                    connection.local().flowController().consumeBytes(stream,
-                            listener.onDataRead(targetCtx, stream.id(), buf, padding, false));
-                    padding = 0; // Padding is only communicated once on the first iteration.
-                    buf.release();
+                    try {
+                        // Also take padding into account.
+                        incrementDecompressedBytes(padding);
 
-                    dataDecompressed = true;
+                        incrementDecompressedBytes(buf.readableBytes());
+                        // Immediately return the bytes back to the flow controller. ConsumedBytesConverter will convert
+                        // from the decompressed amount which the user knows about to the compressed amount which flow
+                        // control knows about.
+                        connection.local().flowController().consumeBytes(stream,
+                                listener.onDataRead(targetCtx, stream.id(), buf, padding, false));
+                        padding = 0; // Padding is only communicated once on the first iteration.
+
+                        dataDecompressed = true;
+                    } finally {
+                        buf.release();
+                    }
                 }
 
                 @Override

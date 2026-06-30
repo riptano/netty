@@ -20,7 +20,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.128.1.dse</version>
+    <version>4.1.135.1.dse</version>
   </parent>
 
   <artifactId>netty-codec</artifactId>
@@ -74,7 +74,7 @@
       <optional>true</optional>
     </dependency>
     <dependency>
-      <groupId>org.lz4</groupId>
+      <groupId>at.yawk.lz4</groupId>
       <artifactId>lz4-java</artifactId>
       <optional>true</optional>
     </dependency>

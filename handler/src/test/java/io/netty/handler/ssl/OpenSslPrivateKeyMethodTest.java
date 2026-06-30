@@ -58,8 +58,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -93,7 +91,7 @@ public class OpenSslPrivateKeyMethodTest {
     public static void init() throws Exception {
         checkShouldUseKeyManagerFactory();
 
-        assumeTrue(OpenSsl.isBoringSSL());
+        assumeTrue(OpenSsl.isBoringSSL() || OpenSsl.isAWSLC());
         // Check if the cipher is supported at all which may not be the case for various JDK versions and OpenSSL API
         // implementations.
         assumeCipherAvailable(SslProvider.OPENSSL);
@@ -110,11 +108,11 @@ public class OpenSslPrivateKeyMethodTest {
     }
 
     @AfterAll
-    public static void destroy() {
-        if (OpenSsl.isBoringSSL()) {
+    public static void destroy() throws InterruptedException {
+        if (OpenSsl.isBoringSSL() || OpenSsl.isAWSLC()) {
             GROUP.shutdownGracefully();
+            assertTrue(EXECUTOR.shutdownAndAwaitTermination(5, TimeUnit.SECONDS));
             CERT.delete();
-            EXECUTOR.shutdown();
         }
     }
 

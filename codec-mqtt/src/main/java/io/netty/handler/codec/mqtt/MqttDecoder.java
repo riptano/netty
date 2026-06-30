@@ -24,6 +24,7 @@ import io.netty.handler.codec.TooLongFrameException;
 import io.netty.handler.codec.mqtt.MqttDecoder.DecoderState;
 import io.netty.handler.codec.mqtt.MqttProperties.IntegerProperty;
 import io.netty.util.CharsetUtil;
+import io.netty.util.Signal;
 import io.netty.util.internal.ObjectUtil;
 
 import java.util.ArrayList;
@@ -96,8 +97,21 @@ public final class MqttDecoder extends ReplayingDecoder<DecoderState> {
 
             case READ_VARIABLE_HEADER:  try {
                 int bytesRemainingBeforeVariableHeader = bytesRemainingInVariablePart;
-                variableHeader = decodeVariableHeader(ctx, buffer, mqttFixedHeader);
-                if (bytesRemainingBeforeVariableHeader > maxBytesInMessage) {
+                boolean bailOut = false;
+                try {
+                    variableHeader = decodeVariableHeader(ctx, buffer, mqttFixedHeader);
+                } catch (Signal signal) {
+                    if (bytesRemainingBeforeVariableHeader > maxBytesInMessage) {
+                        // We couldn't parse the complete message, and it's already too large.
+                        // Swallow the Signal (we don't need more data) and instead bail out
+                        // and throw the TooLongFrameException below.
+                        bailOut = true;
+                    } else {
+                        // Ask for REPLAY if the current message is within maxBytesInMessage.
+                        throw signal;
+                    }
+                }
+                if (bailOut || bytesRemainingBeforeVariableHeader > maxBytesInMessage) {
                     buffer.skipBytes(actualReadableBytes());
                     throw new TooLongFrameException("message length exceeds " + maxBytesInMessage + ": "
                             + bytesRemainingBeforeVariableHeader);
@@ -494,7 +508,11 @@ public final class MqttDecoder extends ReplayingDecoder<DecoderState> {
                 return decodePublishPayload(buffer);
 
             default:
-                // unknown payload , no byte consumed
+                // No payload for this message type. If the fixed header's Remaining Length
+                // claimed bytes beyond what the variable header consumed (e.g. a PINGREQ
+                // with non-zero Remaining Length), the frame is malformed.
+                // See https://github.com/netty/netty/issues/16851
+                validateNoBytesRemain(0);
                 return null;
         }
     }
@@ -731,6 +749,10 @@ public final class MqttDecoder extends ReplayingDecoder<DecoderState> {
         final long propertiesLength = decodeVariableByteInteger(buffer);
         int totalPropertiesLength = unpackA(propertiesLength);
         int numberOfBytesConsumed = unpackB(propertiesLength);
+        if (buffer.readableBytes() < totalPropertiesLength) {
+            // Force an early REPLAY to avoid repeatedly parsing the properties.
+            buffer.readSlice(totalPropertiesLength);
+        }
 
         MqttProperties decodedProperties = new MqttProperties();
         while (numberOfBytesConsumed < totalPropertiesLength) {
