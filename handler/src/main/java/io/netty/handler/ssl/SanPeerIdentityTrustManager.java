@@ -15,6 +15,7 @@
  */
 package io.netty.handler.ssl;
 
+import io.netty.util.NetUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -107,38 +108,47 @@ final class SanPeerIdentityTrustManager extends X509ExtendedTrustManager {
     }
 
     static String resolvePeerIdentity(String peerHost, X509Certificate leafCertificate) throws CertificateException {
-        logger.debug("Resolving SAN peer identity for peerHost={}", peerHost);
+        logger.debug("Resolving peer identity for endpoint verification: peerHost={}", peerHost);
+
         if (peerHost == null || peerHost.isEmpty()) {
-            logger.debug("SAN peer identity lookup aborted because peerHost is empty");
+            logger.debug("No peer host available; skipping SAN-aware peer identity selection");
             return null;
         }
 
         SanTypes sanTypes = readSanTypes(leafCertificate);
-        logger.debug("SAN types for peerHost={}: hasDnsSans={}, hasIpSans={}",
+        logger.debug("Certificate SAN types: peerHost={}, hasDnsSans={}, hasIpSans={}",
                 peerHost, sanTypes.hasDnsSans, sanTypes.hasIpSans);
         if (!sanTypes.hasDnsSans && !sanTypes.hasIpSans) {
-            logger.debug("SAN peer identity lookup aborted for peerHost={} because certificate has no DNS/IP SANs",
+            logger.debug("Certificate contains no DNS or IP SANs; using default endpoint verification",
                     peerHost);
             return null;
         }
 
+        // Preserve IP identity when the certificate contains only IP SANs.
+        // Mixed DNS+IP SAN certificates intentionally fall through so DNS-based
+        // peer identity selection can still be attempted.
         if (sanTypes.hasIpSans && !sanTypes.hasDnsSans) {
-            logger.debug("Using original peerHost={} because certificate only has IP SANs", peerHost);
+            logger.debug("Using IP peer identity '{}' because certificate contains only IP SANs", peerHost);
             return peerHost;
         }
 
-        if (sanTypes.hasDnsSans && !isIpAddress(peerHost)) {
-            logger.debug("Using original peerHost={} because it is already a hostname and certificate has DNS SANs",
+        // The peer identity is already a hostname, so it can be verified
+        // directly against the certificate's DNS SANs.
+        if (sanTypes.hasDnsSans && isHostname(peerHost)) {
+            logger.debug("Using hostname peer identity '{}' for DNS SAN verification",
                     peerHost);
             return peerHost;
         }
 
         String canonicalHost = reverseLookup(peerHost);
         logger.debug("Reverse lookup for peerHost={} returned canonicalHost={}", peerHost, canonicalHost);
-        if (canonicalHost != null && !isIpAddress(canonicalHost)) {
+        if (canonicalHost != null && isHostname(canonicalHost)) {
             logger.debug("Using reverse-looked-up canonicalHost={} for peerHost={}", canonicalHost, peerHost);
             return canonicalHost;
         }
+
+        logger.debug("Reverse DNS lookup did not produce a hostname; using original peer identity '{}'",
+                peerHost);
 
         return peerHost;
     }
@@ -172,8 +182,9 @@ final class SanPeerIdentityTrustManager extends X509ExtendedTrustManager {
         }
     }
 
-    private static boolean isIpAddress(String value) {
-        return value.indexOf(':') >= 0 || value.matches("\\d+\\.\\d+\\.\\d+\\.\\d+");
+    private static boolean isHostname(String value) {
+        return !NetUtil.isValidIpV4Address(value)
+                && !NetUtil.isValidIpV6Address(value);
     }
 
     private static String reverseLookup(String peerHost) {
