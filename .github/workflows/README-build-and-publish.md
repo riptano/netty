@@ -6,41 +6,37 @@ This GitHub Actions workflow (`build-and-publish.yml`) builds the Netty library 
 
 ## Workflow Architecture
 
-The workflow consists of 4 stages that run in sequence:
+The workflow consists of 5 stages. Stages 2, 3, and 4 run in parallel after Stage 1 completes:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Stage 1: Linux x86_64 Full Build                          │
-│  - Builds all Netty modules                                │
-│  - Uses Docker with CentOS 6 for compatibility             │
-│  - Produces complete JAR artifacts                         │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Stage 2: macOS Intel x86_64 Native Libraries              │
-│  - Builds native modules only:                             │
-│    • resolver-dns-native-macos                             │
-│    • transport-native-unix-common                          │
-│    • transport-native-kqueue                               │
-│  - Runs on GitHub-hosted Intel Mac                         │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Stage 3: macOS ARM aarch64 Native Libraries               │
-│  - Builds same native modules as Stage 2                   │
-│  - Runs on GitHub-hosted Apple Silicon Mac                 │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Stage 4: Merge and Publish                                │
-│  - Downloads all artifacts from previous stages            │
-│  - Merges staging repositories                             │
-│  - Generates netty-all module                              │
-│  - Publishes to GitHub Packages                            │
-└─────────────────────────────────────────────────────────────┘
+ Stage 1: Linux x86_64 Full Build
+ - Builds all Netty modules
+ - Uses Docker with CentOS 6 for compatibility
+ - Produces complete JAR artifacts
+
+             +------------------+------------------+
+             |                  |                  |
+ Stage 2:             Stage 3:           Stage 4:
+ Linux aarch64        macOS Intel        macOS ARM aarch64
+ Native Libs          x86_64             Native Libs
+                      Native Libs
+ - transport-         - resolver-dns     - resolver-dns
+   native-epoll         -native-macos      -native-macos
+ - transport-         - transport-       - transport-
+   native-unix-         native-unix-       native-unix-
+   common               common             common
+                      - transport-       - transport-
+ ubuntu-24.04-arm       native-kqueue      native-kqueue
+ runner
+                      GitHub Intel Mac   GitHub Apple
+                                         Silicon Mac
+             +------------------+------------------+
+             |
+ Stage 5: Merge and Publish
+ - Downloads all artifacts from previous stages
+ - Merges staging repositories
+ - Generates netty-all module
+ - Publishes to GitHub Packages
 ```
 
 ## Triggers
@@ -98,7 +94,8 @@ The workflow will automatically start building and publishing.
 ### Intermediate Artifacts
 
 Each build stage uploads its artifacts to GitHub Actions:
-- `linux-x86_64-local-staging` - Linux build artifacts
+- `linux-x86_64-local-staging` - Linux x86_64 build artifacts
+- `linux-aarch64-local-staging` - Linux aarch64 native libraries
 - `macos-x86_64-local-staging` - Intel Mac native libraries
 - `macos-aarch64-local-staging` - ARM Mac native libraries
 - `merged-local-staging` - Final merged artifacts (for debugging)
@@ -156,11 +153,13 @@ Add to your `~/.m2/settings.xml`:
 ## Build Times
 
 Approximate build times (may vary):
-- **Stage 1 (Linux)**: 15-25 minutes
-- **Stage 2 (macOS Intel)**: 10-15 minutes
-- **Stage 3 (macOS ARM)**: 10-15 minutes
-- **Stage 4 (Merge & Publish)**: 5-10 minutes
-- **Total**: ~40-65 minutes
+- **Stage 1 (Linux x86_64)**: 15-25 minutes
+- **Stages 2-4 run in parallel after Stage 1 completes**
+- **Stage 2 (Linux aarch64)**: 10-15 minutes
+- **Stage 3 (macOS Intel)**: 10-15 minutes
+- **Stage 4 (macOS ARM)**: 10-15 minutes
+- **Stage 5 (Merge & Publish)**: 5-10 minutes
+- **Total**: ~30-50 minutes
 
 ## Troubleshooting
 

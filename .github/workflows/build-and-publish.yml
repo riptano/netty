@@ -7,7 +7,7 @@ on:
   # Trigger on version tags
   push:
     branches:
-      - dse-netty-4.1.135
+      - dse-netty-4.1.137.1.dse
     tags:
       - '*.dse'
       - 'dse-netty-*'
@@ -87,7 +87,57 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
-  # Stage 2: Build macOS Intel x86_64 native libraries
+  # Stage 2: Build Linux aarch64 native libraries on a native ARM64 runner
+  build-linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    name: Build Linux aarch64 (Native Libraries)
+    needs: [build-linux-x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      # Cache .m2/repository
+      - name: Cache local Maven repository
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.m2/repository
+          key: cache-maven-linux-aarch64-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            cache-maven-linux-aarch64-${{ hashFiles('**/pom.xml') }}
+            cache-maven-
+
+      - name: Install native build toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y autoconf automake libtool make gcc libaio-dev
+
+      - name: Create local staging directory
+        run: mkdir -p ~/local-staging
+
+      - name: Build and stage Linux aarch64 native libraries
+        run: |
+          ./mvnw -B \
+            -pl transport-native-unix-common,transport-native-epoll \
+            -am deploy \
+            -DskipTests=true \
+            -DaltDeploymentRepository=local-staging::default::file://$(pwd)/local-staging
+
+      - name: Upload local staging directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-aarch64-local-staging
+          path: ${{ github.workspace }}/local-staging
+          if-no-files-found: error
+          include-hidden-files: true
+
+  # Stage 3: Build macOS Intel x86_64 native libraries
   build-macos-intel:
     runs-on: macos-15-intel
     name: Build macOS x86_64 (Native Libraries)
@@ -139,7 +189,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
-  # Stage 3: Build macOS ARM aarch64 native libraries
+  # Stage 4: Build macOS ARM aarch64 native libraries
   build-macos-arm:
     runs-on: macos-15
     name: Build macOS aarch64 (Native Libraries)
@@ -190,11 +240,11 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
-  # Stage 4: Merge artifacts and publish to GitHub Packages
+  # Stage 5: Merge artifacts and publish to GitHub Packages
   publish-to-github-packages:
     runs-on: ubuntu-latest
     name: Merge and Publish to GitHub Packages
-    needs: [build-linux-x64, build-macos-intel, build-macos-arm]
+    needs: [build-linux-x64, build-linux-aarch64, build-macos-intel, build-macos-arm]
 
     steps:
       - uses: actions/checkout@v4
@@ -216,7 +266,7 @@ jobs:
             cache-maven-${{ hashFiles('**/pom.xml') }}
             cache-maven-
 
-      # Configure Maven settings for GitHub Packages
+      # Configure Maven settings for all registries
       - name: Configure Maven settings
         uses: s4u/maven-settings-action@v3.0.0
         with:
@@ -244,6 +294,12 @@ jobs:
           name: linux-x86_64-local-staging
           path: ~/linux-x86_64-local-staging
 
+      - name: Download Linux aarch64 staging directory
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-aarch64-local-staging
+          path: ~/linux-aarch64-local-staging
+
       - name: Download macOS x86_64 staging directory
         uses: actions/download-artifact@v4
         with:
@@ -262,6 +318,7 @@ jobs:
           bash ./.github/scripts/local_staging_install_release.sh \
             ~/.m2/repository \
             ~/linux-x86_64-local-staging \
+            ~/linux-aarch64-local-staging \
             ~/macos-x86_64-local-staging \
             ~/macos-aarch64-local-staging
 
@@ -278,6 +335,7 @@ jobs:
           bash ./.github/scripts/local_staging_install_release.sh \
             ~/local-staging \
             ~/linux-x86_64-local-staging \
+            ~/linux-aarch64-local-staging \
             ~/macos-x86_64-local-staging \
             ~/macos-aarch64-local-staging
 
@@ -289,12 +347,12 @@ jobs:
       # Deploy to GitHub Packages
       - name: Deploy to GitHub Packages
         run: |
-          ./mvnw -B --file pom.xml \
-            org.sonatype.plugins:nexus-staging-maven-plugin:deploy-staged \
-            -DaltStagingDirectory=$HOME/local-staging \
-            -DserverId=github \
-            -DnexusUrl=https://maven.pkg.github.com/${{ github.repository }} \
-            -DrepositoryId=github
+          bash ./.github/scripts/deploy_maven_packages.sh \
+            ~/local-staging \
+            https://maven.pkg.github.com/${{ github.repository }} \
+            github
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload merged staging directory (for debugging)
         uses: actions/upload-artifact@v4
