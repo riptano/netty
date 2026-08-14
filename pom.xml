@@ -26,7 +26,7 @@
   <groupId>io.netty</groupId>
   <artifactId>netty-parent</artifactId>
   <packaging>pom</packaging>
-  <version>4.1.135.2.dse</version>
+  <version>4.1.137.1.dse</version>
 
   <name>Netty</name>
   <url>https://netty.io/</url>
@@ -53,7 +53,7 @@
     <url>https://github.com/netty/netty</url>
     <connection>scm:git:git://github.com/netty/netty.git</connection>
     <developerConnection>scm:git:ssh://git@github.com/netty/netty.git</developerConnection>
-    <tag>netty-4.1.135.Final</tag>
+    <tag>netty-4.1.137.Final</tag>
   </scm>
 
   <developers>
@@ -203,7 +203,7 @@
       </activation>
       <properties>
         <argLine.java9.extras />
-        <argLine.java9>${argLine.java9.extras}</argLine.java9>
+        <argLine.java9>${argLine.java9.extras} -Djdk.tls.SunX509KeyManager.certChecking=false</argLine.java9>
         <forbiddenapis.skip>true</forbiddenapis.skip>
         <!-- 1.4.x does not work in Java10+ -->
         <jboss.marshalling.version>2.0.5.Final</jboss.marshalling.version>
@@ -680,7 +680,7 @@
       <id>boringssl-snapshot</id>
       <properties>
         <tcnative.artifactId>netty-tcnative-boringssl-static</tcnative.artifactId>
-        <tcnative.version>2.0.78.Final-SNAPSHOT</tcnative.version>
+        <tcnative.version>2.0.82.Final-SNAPSHOT</tcnative.version>
         <tcnative.classifier>${os.detected.classifier}</tcnative.classifier>
       </properties>
 
@@ -823,7 +823,7 @@
     <jacoco.argLine />
     <argLine.printGC>-XX:+PrintGCDetails</argLine.printGC>
     <argLine.java9 /> <!-- Overridden when 'java9' profile is active -->
-    <argLine.javaProperties>-D_</argLine.javaProperties>
+    <argLine.javaProperties>-Djdk.tls.ephemeralDHKeySize=2048</argLine.javaProperties>
     <!-- Configure the os-maven-plugin extension to expand the classifier on                  -->
     <!-- Fedora-"like" systems. This is currently only used for the netty-tcnative dependency -->
     <osmaven.version>1.7.1</osmaven.version>
@@ -831,7 +831,7 @@
     <os.detection.classifierWithLikes>fedora,suse,arch</os.detection.classifierWithLikes>
     <tcnative.artifactId>netty-tcnative</tcnative.artifactId>
     <!-- Keep in sync with bom/pom.xml -->
-    <tcnative.version>2.0.77.Final</tcnative.version>
+    <tcnative.version>2.0.81.Final</tcnative.version>
     <tcnative.classifier>${os.detected.classifier}</tcnative.classifier>
     <conscrypt.groupId>org.conscrypt</conscrypt.groupId>
     <conscrypt.artifactId>conscrypt-openjdk-uber</conscrypt.artifactId>
@@ -1060,12 +1060,12 @@
       <dependency>
         <groupId>com.ning</groupId>
         <artifactId>compress-lzf</artifactId>
-        <version>1.2.0</version>
+        <version>1.2.1</version>
       </dependency>
       <dependency>
         <groupId>at.yawk.lz4</groupId>
         <artifactId>lz4-java</artifactId>
-        <version>1.10.1</version>
+        <version>1.11.1</version>
       </dependency>
       <dependency>
         <groupId>com.github.jponge</groupId>
@@ -1430,6 +1430,18 @@
                 </item>
                 <item>
                   <ignore>true</ignore>
+                  <code>java.class.externalClassExposedInAPI</code>
+                  <new>class net.jpountz.lz4.LZ4JNIFastResetCompressor</new>
+                  <justification>The optional lz4-java dependency exposes this class through LZ4Factory, which is part of Netty's public API to allow users to customize LZ4 implementations.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.class.externalClassExposedInAPI</code>
+                  <new>class net.jpountz.lz4.LZ4JNIHCFastResetCompressor</new>
+                  <justification>The optional lz4-java dependency exposes this class through LZ4Factory, which is part of Netty's public API to allow users to customize LZ4 implementations.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
                   <code>java.field.removed</code>
                   <classQualifiedName>io.netty.util.internal.InternalThreadLocalMap</classQualifiedName>
                   <justification>Ignore cache padding.</justification>
@@ -1614,6 +1626,59 @@
                   <new>method void io.netty.handler.codec.sctp.SctpMessageCompletionHandler::exceptionCaught(io.netty.channel.ChannelHandlerContext, java.lang.Throwable) throws java.lang.Exception</new>
                   <annotation>@io.netty.channel.ChannelHandlerMask.Skip</annotation>
                   <justification>Change is harmless for compatibility. Needed for a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.annotation.added</code>
+                  <old>method void io.netty.handler.codec.spdy.SpdyHttpDecoder::channelInactive(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception</old>
+                  <new>method void io.netty.channel.ChannelInboundHandlerAdapter::channelInactive(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.codec.spdy.SpdyHttpDecoder</new>
+                  <annotation>@io.netty.channel.ChannelHandlerMask.Skip</annotation>
+                  <justification>Change is harmless for compatibility. Needed for a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.annotation.removed</code>
+                  <old>method void io.netty.channel.ChannelInboundHandlerAdapter::channelInactive(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</old>
+                  <new>method void io.netty.handler.codec.ByteToMessageDecoder::channelInactive(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</new>
+                  <annotation>@io.netty.channel.ChannelHandlerMask.Skip</annotation>
+                  <justification>Change is harmless for compatibility. Needed for a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.annotation.removed</code>
+                  <old>method void io.netty.channel.ChannelInboundHandlerAdapter::channelRead(io.netty.channel.ChannelHandlerContext, java.lang.Object) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</old>
+                  <new>method void io.netty.handler.codec.ByteToMessageDecoder::channelRead(io.netty.channel.ChannelHandlerContext, java.lang.Object) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</new>
+                  <annotation>@io.netty.channel.ChannelHandlerMask.Skip</annotation>
+                  <justification>Change is harmless for compatibility. Needed for a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.annotation.removed</code>
+                  <old>method void io.netty.channel.ChannelInboundHandlerAdapter::channelReadComplete(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</old>
+                  <new>method void io.netty.handler.codec.ByteToMessageDecoder::channelReadComplete(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</new>
+                  <annotation>@io.netty.channel.ChannelHandlerMask.Skip</annotation>
+                  <justification>Change is harmless for compatibility. Needed for a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.method.finalMethodAddedToNonFinalClass</code>
+                  <new>method void io.netty.handler.codec.ByteToMessageDecoder::discardSomeReadBytes() @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</new>
+                  <justification>Change is tolerated for compatibility. Part of a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.method.nowFinal</code>
+                  <old>method void io.netty.channel.ChannelHandlerAdapter::handlerRemoved(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</old>
+                  <new>method void io.netty.handler.codec.ByteToMessageDecoder::handlerRemoved(io.netty.channel.ChannelHandlerContext) throws java.lang.Exception @ io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</new>
+                  <justification>Change is tolerated for compatibility. Part of a security fix.</justification>
+                </item>
+                <item>
+                  <ignore>true</ignore>
+                  <code>java.class.nonFinalClassInheritsFromNewClass</code>
+                  <old>class io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</old>
+                  <new>class io.netty.handler.ssl.ocsp.OcspServerCertificateValidator</new>
+                  <superClass>io.netty.handler.codec.ByteToMessageDecoder</superClass>
+                  <justification>Change is tolerated for compatibility. Part of a security fix.</justification>
                 </item>
               </differences>
             </revapi.differences>
@@ -2210,7 +2275,7 @@
         <!-- keep surefire and failsafe in sync -->
         <plugin>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.5.3</version>
+          <version>3.5.6</version>
         </plugin>
         <!-- keep surefire and failsafe in sync -->
         <plugin>
