@@ -158,4 +158,13 @@ public class PlatformDependentTest {
         assertEquals(0, buffer.capacity());
         PlatformDependent.freeDirectNoCleaner(buffer);
     }
+
+    @Test
+    public void shouldCountAllocatedBufferMemory() {
+        long before = PlatformDependent.usedDirectMemory();
+        ByteBuffer buffer = PlatformDependent.allocateDirect(4068);
+        assertEquals(before + 4068, PlatformDependent.usedDirectMemory());
+        PlatformDependent.freeDirect(buffer);
+        assertEquals(before, PlatformDependent.usedDirectMemory());
+    }
 }

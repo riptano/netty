@@ -70,14 +70,14 @@ public final class EpollEventArray {
      * Return the length of the {@link EpollEventArray} which represent the maximum number of {@code epoll_events}
      * that can be stored in it.
      */
-    int length() {
+    public int length() {
         return length;
     }
 
     /**
      * Increase the storage of this {@link EpollEventArray}.
      */
-    void increase() {
+    public void increase() {
         // double the size
         length <<= 1;
         // There is no need to preserve what was in the memory before.

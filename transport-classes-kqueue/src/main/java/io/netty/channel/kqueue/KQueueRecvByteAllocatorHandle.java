@@ -80,6 +80,11 @@ final class KQueueRecvByteAllocatorHandle extends DelegatingHandle implements Ex
         return continueReading(defaultMaybeMoreDataSupplier);
     }
 
+    @Override
+    public void channelClosed() {
+        delegate().channelClosed();
+    }
+
     void readEOF() {
         readEOF = true;
     }

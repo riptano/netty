@@ -26,6 +26,7 @@ import static io.netty.channel.unix.Errors.newIOException;
 import static io.netty.channel.unix.Limits.IOV_MAX;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
+import io.netty.util.internal.PlatformDependent;
 import static java.lang.Math.min;
 
 /**
@@ -36,6 +37,23 @@ public class FileDescriptor {
 
     private static final AtomicIntegerFieldUpdater<FileDescriptor> stateUpdater =
             AtomicIntegerFieldUpdater.newUpdater(FileDescriptor.class, "state");
+
+    {
+        String arch = PlatformDependent.normalizedArch();
+        if ("x86_64".equals(arch)) {
+            O_DIRECT = 040000;
+        } else if ("aarch64".equals(arch)) {
+            // https://elixir.bootlin.com/linux/latest/source/arch/arm64/include/uapi/asm/fcntl.h#L25
+            O_DIRECT = 0200000;
+        }
+    }
+
+    public static final int O_RDONLY = 00;
+    public static final int O_WRONLY = 01;
+    public static final int O_CREAT = 0100;
+    public static final int O_TRUNC = 01000;
+    public static final int O_APPEND = 02000;
+    public static int O_DIRECT;
 
     private static final int STATE_CLOSED_MASK = 1;
     private static final int STATE_INPUT_SHUTDOWN_MASK = 1 << 1;
@@ -148,6 +166,10 @@ public class FileDescriptor {
         return ioResult("readAddress", res);
     }
 
+    public final long length() {
+        return length(fd);
+    }
+
     @Override
     public String toString() {
         return "FileDescriptor{" +
@@ -175,8 +197,8 @@ public class FileDescriptor {
     /**
      * Open a new {@link FileDescriptor} for the given path.
      */
-    public static FileDescriptor from(String path) throws IOException {
-        int res = open(checkNotNull(path, "path"));
+    public static FileDescriptor from(String path, int flags) throws IOException {
+        int res = open(checkNotNull(path, "path"), flags);
         if (res < 0) {
             throw newIOException("open", res);
         }
@@ -186,8 +208,8 @@ public class FileDescriptor {
     /**
      * Open a new {@link FileDescriptor} for the given {@link File}.
      */
-    public static FileDescriptor from(File file) throws IOException {
-        return from(checkNotNull(file, "file").getPath());
+    public static FileDescriptor from(File file, int flags) throws IOException {
+        return from(checkNotNull(file, "file").getPath(), flags);
     }
 
     /**
@@ -225,7 +247,7 @@ public class FileDescriptor {
         return state | STATE_OUTPUT_SHUTDOWN_MASK;
     }
 
-    private static native int open(String path);
+    private static native int open(String path, int flags);
     private static native int close(int fd);
 
     private static native int write(int fd, ByteBuffer buf, int pos, int limit);
@@ -237,4 +259,6 @@ public class FileDescriptor {
     private static native int readAddress(int fd, long address, int pos, int limit);
 
     private static native long newPipe();
+
+    private static native long length(int fd);
 }

@@ -227,6 +227,10 @@ public class SocketAutoReadTest extends AbstractSocketTest {
                 public void readComplete() {
                     // Nothing needs to be done or adjusted after each read cycle is completed.
                 }
+
+                @Override
+                public void channelClosed() {
+                }
             };
         }
     }
