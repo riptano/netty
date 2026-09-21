@@ -150,6 +150,80 @@ Add to your `~/.m2/settings.xml`:
 </dependency>
 ```
 
+## Manual Publishing to Internal Artifactory
+
+The GitHub Actions workflow publishes to GitHub Packages automatically, but
+publishing to an internal Artifactory instance (e.g. behind a VPN) must be
+done manually using the merged staging bundle produced by the workflow.
+
+### Prerequisites
+
+- VPN connected to reach your internal Artifactory instance
+- Maven installed locally
+- `~/.m2/settings.xml` configured with an `artifactory` server entry:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>artifactory</id>
+      <username>YOUR_ARTIFACTORY_USERNAME</username>
+      <password>YOUR_ARTIFACTORY_TOKEN_OR_PASSWORD</password>
+    </server>
+  </servers>
+</settings>
+```
+
+### Steps
+
+**1. Download the merged staging bundle**
+
+From the workflow run page on GitHub:
+1. Go to the **Actions** tab → select the completed workflow run
+2. Scroll to the **Artifacts** section at the bottom
+3. Download `merged-local-staging`
+
+**2. Unzip the bundle**
+
+```bash
+unzip merged-local-staging.zip -d /tmp/netty-<VERSION>
+# e.g. unzip merged-local-staging.zip -d /tmp/netty-4.1.137.1.dse
+```
+
+The top-level directory inside will be `io/` — the root of the Maven
+repository layout.
+
+**3. Connect to VPN**
+
+Ensure your VPN is active and the Artifactory hostname is reachable before
+proceeding.
+
+**4. Run the deploy script**
+
+```bash
+cd /tmp && bash /path/to/riptano-netty/.github/scripts/deploy_maven_packages.sh \
+  /tmp/netty-<VERSION> \
+  https://repo.aws.dsinternal.org/artifactory/datastax-releases-local \
+  artifactory
+```
+
+> **Important**: Run from `/tmp` (or any directory without a `pom.xml`), not
+> from inside the `riptano-netty` repo. Running from the repo root causes
+> Maven to pick up the project `pom.xml` and fail.
+
+The script iterates over every `.pom` in the staging directory and uploads
+each artifact individually. If an artifact already exists in Artifactory the
+failure is logged as a warning and the script continues to the next artifact.
+
+### Troubleshooting
+
+**`No address associated with hostname`** — VPN is not connected or dropped.
+Reconnect and re-run; already-uploaded artifacts will be skipped with a warning.
+
+**`Could not find artifact ... in artifactory`** — Maven deployed but then
+failed to verify. Usually means the artifact was actually uploaded successfully;
+check the Artifactory UI to confirm before retrying.
+
 ## Build Times
 
 Approximate build times (may vary):
