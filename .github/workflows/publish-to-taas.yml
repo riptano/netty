@@ -128,6 +128,9 @@ jobs:
         run: docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
 
       - name: Build and stage all artifacts
+        # Set version first, then build the full reactor in one pass.
+        # Maven resolves inter-module dependencies from the in-memory reactor,
+        # so the BOM is found without any local repo tricks.
         run: |
           docker run -t \
             -v ~/.m2:/root/.m2:Z \
@@ -138,11 +141,9 @@ jobs:
             netty-centos6 \
             bash -ic "
               set -euo pipefail
+              ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
               ./mvnw -B clean install -DskipTests=true
-              ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-              ./mvnw -B -N install -DskipTests=true
-              ./mvnw -B -pl bom install -DskipTests=true
-              ./mvnw -B -nsu deploy \
+              ./mvnw -B deploy \
                 -DaltDeploymentRepository=local-staging::default::file:///root/local-staging \
                 -DskipTests=true
             "
@@ -160,7 +161,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-linux-aarch64:
     runs-on: ubuntu-24.04-arm
-    needs: [validate, build-linux-x64]
+    needs: validate
     name: Build Linux aarch64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -189,32 +190,15 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y autoconf automake libtool make gcc libaio-dev
 
-      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
-      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
-      - name: Download Linux x86_64 staging (for BOM seed)
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64-local-staging
-          path: ~/linux-x86_64-local-staging
-
-      - name: Install Linux x86_64 artifacts to local Maven repository
-        run: |
-          bash .github/scripts/local_staging_install_release.sh \
-            ~/.m2/repository \
-            ~/linux-x86_64-local-staging
-
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
       - name: Set version and stage Linux aarch64 native libraries
+        # versions:set first, then deploy with -am so Maven resolves
+        # inter-module deps from the in-memory reactor (not local repo).
         run: |
-          ./mvnw -B clean install -DskipTests=true \
-            -pl transport-native-unix-common,transport-native-epoll \
-            -am
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B -N install -DskipTests=true
-          ./mvnw -B -pl bom install -DskipTests=true
-          ./mvnw -B -nsu \
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B \
             -pl transport-native-unix-common,transport-native-epoll \
             -am deploy \
             -DskipTests=true \
@@ -234,7 +218,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos-intel:
     runs-on: macos-15-intel
-    needs: [validate, build-linux-x64]
+    needs: validate
     name: Build macOS x86_64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -262,34 +246,15 @@ jobs:
         run: brew bundle
         continue-on-error: true
 
-      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
-      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
-      - name: Download Linux x86_64 staging (for BOM seed)
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64-local-staging
-          path: ~/linux-x86_64-local-staging
-
-      - name: Install Linux x86_64 artifacts to local Maven repository
-        run: |
-          bash .github/scripts/local_staging_install_release.sh \
-            ~/.m2/repository \
-            ~/linux-x86_64-local-staging
-
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
       - name: Set version and stage macOS Intel native libraries
         run: |
-          ./mvnw -B clean install -DskipTests=true \
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B -U \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            -am
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B -N install -DskipTests=true
-          ./mvnw -B -pl bom install -DskipTests=true
-          ./mvnw -B -nsu \
-            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            deploy \
+            -am deploy \
             -DskipTests \
             -DaltDeploymentRepository=local-staging::default::file:///$(pwd)/local-staging
 
@@ -307,7 +272,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos-arm:
     runs-on: macos-15
-    needs: [validate, build-linux-x64]
+    needs: validate
     name: Build macOS aarch64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -335,34 +300,15 @@ jobs:
         run: brew bundle
         continue-on-error: true
 
-      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
-      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
-      - name: Download Linux x86_64 staging (for BOM seed)
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64-local-staging
-          path: ~/linux-x86_64-local-staging
-
-      - name: Install Linux x86_64 artifacts to local Maven repository
-        run: |
-          bash .github/scripts/local_staging_install_release.sh \
-            ~/.m2/repository \
-            ~/linux-x86_64-local-staging
-
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
       - name: Set version and stage macOS ARM native libraries
         run: |
-          ./mvnw -B clean install -DskipTests=true \
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B -Pmac-m1-cross-compile \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            -am
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B -N install -DskipTests=true
-          ./mvnw -B -pl bom install -DskipTests=true
-          ./mvnw -B -nsu -Pmac-m1-cross-compile \
-            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            deploy \
+            -am deploy \
             -DskipTests \
             -DaltDeploymentRepository=local-staging::default::file:///$(pwd)/local-staging
 
@@ -458,11 +404,13 @@ jobs:
             ~/macos-aarch64-local-staging
 
       # netty-all is an aggregation JAR that includes every other module.
-      # It must be built last, after all platform artifacts are in the local repo.
+      # Must be built last, after all platform staging dirs are installed into ~/.m2.
+      # All netty deps at VERSION are now in ~/.m2, so -nsu prevents Maven from
+      # doing a remote SNAPSHOT check and finding nothing at Sonatype.
       - name: Set version and build netty-all
         run: |
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B --file pom.xml -pl all clean install -DskipTests=true
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B -nsu --file pom.xml -pl all clean install -DskipTests=true
 
       # Merge all platform staging dirs into one tree, then add netty-all.
       - name: Merge staging repositories
@@ -475,6 +423,7 @@ jobs:
             ~/macos-aarch64-local-staging
 
           if [ -d "$HOME/.m2/repository/io/netty/netty-all" ]; then
+            mkdir -p "$HOME/local-staging/io/netty/"
             cp -r "$HOME/.m2/repository/io/netty/netty-all" \
                   "$HOME/local-staging/io/netty/"
           fi
