@@ -21,12 +21,8 @@ name: Publish DataStax Netty to IBM TaaS Artifactory
 # ---------------------------------------------------------------------------
 
 on:
-  # Manual trigger only. The push trigger below exists solely so that GitHub
-  # registers this workflow in the Actions UI and API — it matches a branch
-  # pattern that will never exist, so it never auto-fires.
-  push:
-    branches:
-      - 'workflow-registration-only'
+  # Manual trigger only — workflow_dispatch.
+  # Triggered from: Actions tab → Publish DataStax Netty to IBM TaaS Artifactory → Run workflow
   workflow_dispatch:
     inputs:
       branch:
