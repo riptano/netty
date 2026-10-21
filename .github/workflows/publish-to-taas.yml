@@ -158,7 +158,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-linux-aarch64:
     runs-on: ubuntu-24.04-arm
-    needs: validate
+    needs: [validate, build-linux-x64]
     name: Build Linux aarch64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -187,6 +187,20 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y autoconf automake libtool make gcc libaio-dev
 
+      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
+      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
+      - name: Download Linux x86_64 staging (for BOM seed)
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64-local-staging
+          path: ~/linux-x86_64-local-staging
+
+      - name: Install Linux x86_64 artifacts to local Maven repository
+        run: |
+          bash .github/scripts/local_staging_install_release.sh \
+            ~/.m2/repository \
+            ~/linux-x86_64-local-staging
+
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
@@ -213,7 +227,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos-intel:
     runs-on: macos-15-intel
-    needs: validate
+    needs: [validate, build-linux-x64]
     name: Build macOS x86_64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -241,6 +255,20 @@ jobs:
         run: brew bundle
         continue-on-error: true
 
+      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
+      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
+      - name: Download Linux x86_64 staging (for BOM seed)
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64-local-staging
+          path: ~/linux-x86_64-local-staging
+
+      - name: Install Linux x86_64 artifacts to local Maven repository
+        run: |
+          bash .github/scripts/local_staging_install_release.sh \
+            ~/.m2/repository \
+            ~/linux-x86_64-local-staging
+
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
@@ -267,7 +295,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos-arm:
     runs-on: macos-15
-    needs: validate
+    needs: [validate, build-linux-x64]
     name: Build macOS aarch64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -294,6 +322,20 @@ jobs:
       - name: Install tools via Brewfile
         run: brew bundle
         continue-on-error: true
+
+      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
+      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
+      - name: Download Linux x86_64 staging (for BOM seed)
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64-local-staging
+          path: ~/linux-x86_64-local-staging
+
+      - name: Install Linux x86_64 artifacts to local Maven repository
+        run: |
+          bash .github/scripts/local_staging_install_release.sh \
+            ~/.m2/repository \
+            ~/linux-x86_64-local-staging
 
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
