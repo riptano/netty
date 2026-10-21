@@ -138,8 +138,8 @@ jobs:
             netty-centos6 \
             bash -ic "
               set -euo pipefail
-              ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
               ./mvnw -B clean install -DskipTests=true
+              ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
               ./mvnw -B deploy \
                 -DaltDeploymentRepository=local-staging::default::file:///root/local-staging \
                 -DskipTests=true
@@ -206,6 +206,9 @@ jobs:
 
       - name: Set version and stage Linux aarch64 native libraries
         run: |
+          ./mvnw -B clean install -DskipTests=true \
+            -pl transport-native-unix-common,transport-native-epoll \
+            -am
           ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
           ./mvnw -B \
             -pl transport-native-unix-common,transport-native-epoll \
@@ -274,6 +277,9 @@ jobs:
 
       - name: Set version and stage macOS Intel native libraries
         run: |
+          ./mvnw -B clean install -DskipTests=true \
+            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
+            -am
           ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
           ./mvnw -B -U \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
@@ -342,6 +348,9 @@ jobs:
 
       - name: Set version and stage macOS ARM native libraries
         run: |
+          ./mvnw -B clean install -DskipTests=true \
+            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
+            -am
           ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
           ./mvnw -B -Pmac-m1-cross-compile \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
