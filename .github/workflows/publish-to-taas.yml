@@ -3,19 +3,22 @@ name: Publish DataStax Netty to IBM TaaS Artifactory
 # ---------------------------------------------------------------------------
 # Publishes our internal Netty fork to IBM TaaS Artifactory.
 #
-# Modes:
-#   release   version: <upstream>.<N>.dse        e.g. 4.1.137.2.dse
-#             N is auto-incremented by querying what is already in TaaS.
-#   snapshot  version: <upstream>-<sha>-SNAPSHOT  e.g. 4.1.137-a3f5b2c-SNAPSHOT
-#             Each commit produces a distinct snapshot. No git tag, no pom commit.
+# The version always comes from pom.xml (the single source of truth):
+#   release   publishes <pom-version>            e.g. 4.1.137.1.dse
+#             to datastax-team-nosql-releases-maven-local
+#             Fails if that release already exists there. Pushes a git tag.
+#   snapshot  publishes <pom-version>-SNAPSHOT   e.g. 4.1.137.1.dse-SNAPSHOT
+#             to datastax-team-nosql-snapshots-maven-local
+#             Re-publishing overwrites the previous snapshot. No git tag.
+# To publish a new release version, bump the version in pom.xml first.
 #
 # Required GitHub secrets (already set on riptano/netty):
 #   TAAS_USERNAME   datastax-enterprise-automation@ibm.com
 #   TAAS_PASSWORD   identity token from 1Password → DSE-Shared →
 #                   "IBM TaaS JFrog: datastax-enterprise-automation Identity Token"
 #
-# No SSH deploy key needed. The release git push (version-bump commit + tag)
-# uses the workflow's built-in GITHUB_TOKEN with contents:write permission.
+# No SSH deploy key needed. The release git tag push uses the workflow's
+# built-in GITHUB_TOKEN with contents:write permission.
 #
 # No Jenkins macOS instances needed. macOS builds use free GitHub-hosted runners.
 # ---------------------------------------------------------------------------
@@ -38,7 +41,7 @@ on:
           - snapshot
 
 permissions:
-  contents: write   # push version-bump commit + tag back to branch on release
+  contents: write   # push the release git tag
   packages: read
 
 env:
@@ -47,8 +50,9 @@ env:
     -Dmaven.wagon.http.pool=false
     -Dmaven.wagon.http.retryhandler.count=5
     -Dmaven.wagon.httpconnectionManager.ttlSeconds=240
-  TAAS_API_URL:  https://na.artifactory.swg-devops.com/artifactory
-  TAAS_REPO:     datastax-team-dse-external-libs-maven-local
+  TAAS_API_URL:        https://na.artifactory.swg-devops.com/artifactory
+  TAAS_RELEASES_REPO:  datastax-team-nosql-releases-maven-local
+  TAAS_SNAPSHOTS_REPO: datastax-team-nosql-snapshots-maven-local
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -82,7 +86,7 @@ jobs:
           TAAS_USERNAME: ${{ secrets.TAAS_USERNAME }}
           TAAS_PASSWORD: ${{ secrets.TAAS_PASSWORD }}
           TAAS_API_URL:  ${{ env.TAAS_API_URL }}
-          TAAS_REPO:     ${{ env.TAAS_REPO }}
+          TAAS_REPO:     ${{ inputs.mode == 'release' && env.TAAS_RELEASES_REPO || env.TAAS_SNAPSHOTS_REPO }}
         run: |
           set -euo pipefail
           POM_VERSION=$(./mvnw -B -q help:evaluate \
@@ -94,7 +98,7 @@ jobs:
 
           # Also resolve and export the deploy URL so publish job doesn't
           # repeat the logic.
-          echo "deploy_url=${{ env.TAAS_API_URL }}/${{ env.TAAS_REPO }}" \
+          echo "deploy_url=${{ env.TAAS_API_URL }}/${TAAS_REPO}" \
             >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
@@ -118,8 +122,8 @@ jobs:
         continue-on-error: true
         with:
           path: ~/.m2/repository
-          key: cache-maven-linux-x64-${{ hashFiles('**/pom.xml') }}
-          restore-keys: cache-maven-linux-x64-
+          key: taas-maven-linux-x64-${{ hashFiles('**/pom.xml') }}
+          restore-keys: taas-maven-linux-x64-
 
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
@@ -128,6 +132,9 @@ jobs:
         run: docker build -f docker/Dockerfile-netty-centos6 -t netty-centos6 .
 
       - name: Build and stage all artifacts
+        # Set version first, then build the full reactor in one pass.
+        # Maven resolves inter-module dependencies from the in-memory reactor,
+        # so the BOM is found without any local repo tricks.
         run: |
           docker run -t \
             -v ~/.m2:/root/.m2:Z \
@@ -138,11 +145,9 @@ jobs:
             netty-centos6 \
             bash -ic "
               set -euo pipefail
+              ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
               ./mvnw -B clean install -DskipTests=true
-              ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-              ./mvnw -B -N install -DskipTests=true
-              ./mvnw -B -pl bom install -DskipTests=true
-              ./mvnw -B -nsu deploy \
+              ./mvnw -B deploy \
                 -DaltDeploymentRepository=local-staging::default::file:///root/local-staging \
                 -DskipTests=true
             "
@@ -160,7 +165,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-linux-aarch64:
     runs-on: ubuntu-24.04-arm
-    needs: [validate, build-linux-x64]
+    needs: validate
     name: Build Linux aarch64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -181,40 +186,23 @@ jobs:
         continue-on-error: true
         with:
           path: ~/.m2/repository
-          key: cache-maven-linux-aarch64-${{ hashFiles('**/pom.xml') }}
-          restore-keys: cache-maven-linux-aarch64-
+          key: taas-maven-linux-aarch64-${{ hashFiles('**/pom.xml') }}
+          restore-keys: taas-maven-linux-aarch64-
 
       - name: Install native build toolchain
         run: |
           sudo apt-get update -q
           sudo apt-get install -y autoconf automake libtool make gcc libaio-dev
 
-      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
-      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
-      - name: Download Linux x86_64 staging (for BOM seed)
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64-local-staging
-          path: ~/linux-x86_64-local-staging
-
-      - name: Install Linux x86_64 artifacts to local Maven repository
-        run: |
-          bash .github/scripts/local_staging_install_release.sh \
-            ~/.m2/repository \
-            ~/linux-x86_64-local-staging
-
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
       - name: Set version and stage Linux aarch64 native libraries
+        # versions:set first, then deploy with -am so Maven resolves
+        # inter-module deps from the in-memory reactor (not local repo).
         run: |
-          ./mvnw -B clean install -DskipTests=true \
-            -pl transport-native-unix-common,transport-native-epoll \
-            -am
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B -N install -DskipTests=true
-          ./mvnw -B -pl bom install -DskipTests=true
-          ./mvnw -B -nsu \
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B \
             -pl transport-native-unix-common,transport-native-epoll \
             -am deploy \
             -DskipTests=true \
@@ -234,7 +222,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos-intel:
     runs-on: macos-15-intel
-    needs: [validate, build-linux-x64]
+    needs: validate
     name: Build macOS x86_64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -255,41 +243,22 @@ jobs:
         continue-on-error: true
         with:
           path: ~/.m2/repository
-          key: cache-maven-macos-intel-${{ hashFiles('**/pom.xml') }}
-          restore-keys: cache-maven-macos-intel-
+          key: taas-maven-macos-intel-${{ hashFiles('**/pom.xml') }}
+          restore-keys: taas-maven-macos-intel-
 
       - name: Install tools via Brewfile
         run: brew bundle
         continue-on-error: true
-
-      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
-      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
-      - name: Download Linux x86_64 staging (for BOM seed)
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64-local-staging
-          path: ~/linux-x86_64-local-staging
-
-      - name: Install Linux x86_64 artifacts to local Maven repository
-        run: |
-          bash .github/scripts/local_staging_install_release.sh \
-            ~/.m2/repository \
-            ~/linux-x86_64-local-staging
 
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
       - name: Set version and stage macOS Intel native libraries
         run: |
-          ./mvnw -B clean install -DskipTests=true \
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B -U \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            -am
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B -N install -DskipTests=true
-          ./mvnw -B -pl bom install -DskipTests=true
-          ./mvnw -B -nsu \
-            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            deploy \
+            -am deploy \
             -DskipTests \
             -DaltDeploymentRepository=local-staging::default::file:///$(pwd)/local-staging
 
@@ -307,7 +276,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos-arm:
     runs-on: macos-15
-    needs: [validate, build-linux-x64]
+    needs: validate
     name: Build macOS aarch64 (Native Libraries)
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -328,41 +297,22 @@ jobs:
         continue-on-error: true
         with:
           path: ~/.m2/repository
-          key: cache-maven-macos-arm-${{ hashFiles('**/pom.xml') }}
-          restore-keys: cache-maven-macos-arm-
+          key: taas-maven-macos-arm-${{ hashFiles('**/pom.xml') }}
+          restore-keys: taas-maven-macos-arm-
 
       - name: Install tools via Brewfile
         run: brew bundle
         continue-on-error: true
-
-      # Seed local Maven repo with the BOM and all JARs from the linux-x64 build
-      # so the -pl submodule build can resolve io.netty:netty-bom at the new version.
-      - name: Download Linux x86_64 staging (for BOM seed)
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x86_64-local-staging
-          path: ~/linux-x86_64-local-staging
-
-      - name: Install Linux x86_64 artifacts to local Maven repository
-        run: |
-          bash .github/scripts/local_staging_install_release.sh \
-            ~/.m2/repository \
-            ~/linux-x86_64-local-staging
 
       - name: Create local staging directory
         run: mkdir -p ~/local-staging
 
       - name: Set version and stage macOS ARM native libraries
         run: |
-          ./mvnw -B clean install -DskipTests=true \
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+          ./mvnw -B -Pmac-m1-cross-compile \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            -am
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
-          ./mvnw -B -N install -DskipTests=true
-          ./mvnw -B -pl bom install -DskipTests=true
-          ./mvnw -B -nsu -Pmac-m1-cross-compile \
-            -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
-            deploy \
+            -am deploy \
             -DskipTests \
             -DaltDeploymentRepository=local-staging::default::file:///$(pwd)/local-staging
 
@@ -405,8 +355,8 @@ jobs:
         continue-on-error: true
         with:
           path: ~/.m2/repository
-          key: cache-maven-publish-${{ hashFiles('**/pom.xml') }}
-          restore-keys: cache-maven-publish-
+          key: taas-maven-publish-${{ hashFiles('**/pom.xml') }}
+          restore-keys: taas-maven-publish-
 
       # Write TaaS credentials into ~/.m2/settings.xml so that
       # deploy_maven_packages.sh → mvn deploy:deploy-file can authenticate.
@@ -446,6 +396,18 @@ jobs:
           name: macos-aarch64-local-staging
           path: ~/macos-aarch64-local-staging
 
+      # SNAPSHOT deploys to a file:// repo are written with timestamped names
+      # (netty-buffer-<v>-20261021.082047-1.jar), which a local ~/.m2 cannot
+      # resolve — Maven would fall back to Sonatype and fail. Rename them to
+      # the plain -SNAPSHOT form. No-op for release versions.
+      - name: Normalize SNAPSHOT file names in staging directories
+        run: |
+          bash .github/scripts/snapshot_staging_normalize.sh \
+            ~/linux-x86_64-local-staging \
+            ~/linux-aarch64-local-staging \
+            ~/macos-x86_64-local-staging \
+            ~/macos-aarch64-local-staging
+
       # Install all platform artifacts into the local Maven repo so that the
       # netty-all aggregation step can resolve them.
       - name: Install platform artifacts to local Maven repository
@@ -458,10 +420,11 @@ jobs:
             ~/macos-aarch64-local-staging
 
       # netty-all is an aggregation JAR that includes every other module.
-      # It must be built last, after all platform artifacts are in the local repo.
+      # Must be built last, after all platform staging dirs are installed into
+      # ~/.m2. Only `all` is in the reactor; everything else resolves from ~/.m2.
       - name: Set version and build netty-all
         run: |
-          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+          ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
           ./mvnw -B --file pom.xml -pl all clean install -DskipTests=true
 
       # Merge all platform staging dirs into one tree, then add netty-all.
@@ -474,10 +437,11 @@ jobs:
             ~/macos-x86_64-local-staging \
             ~/macos-aarch64-local-staging
 
-          if [ -d "$HOME/.m2/repository/io/netty/netty-all" ]; then
-            cp -r "$HOME/.m2/repository/io/netty/netty-all" \
-                  "$HOME/local-staging/io/netty/"
-          fi
+          # Only this run's version — ~/.m2 is cache-restored and may hold
+          # netty-all from earlier runs that must not be re-uploaded.
+          mkdir -p "$HOME/local-staging/io/netty/netty-all"
+          cp -r "$HOME/.m2/repository/io/netty/netty-all/${{ env.VERSION }}" \
+                "$HOME/local-staging/io/netty/netty-all/"
 
       # Deploy every artifact in the merged staging dir to TaaS Artifactory.
       # deploy_maven_packages.sh tolerates individual failures (warns and
@@ -491,24 +455,16 @@ jobs:
             taas
 
       # -----------------------------------------------------------------------
-      # Release only: commit the version-bumped pom.xml files back to the
-      # branch and push a git tag. Uses GITHUB_TOKEN (contents:write).
-      # Not needed for snapshots — each snapshot is identified by its SHA,
-      # no pom.xml changes and no tagging.
+      # Release only: tag the commit that was published. The release version
+      # equals the pom.xml version, so there is nothing to commit.
+      # Uses GITHUB_TOKEN (contents:write).
       # -----------------------------------------------------------------------
-      - name: Commit version bump and push tag
+      - name: Push release tag
         if: inputs.mode == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name  "DataStax Engineering"
           git config user.email "dseng@datastax.com"
-
-          git add $(git diff --name-only --diff-filter=M | grep pom.xml || true)
-          git commit -m "Set version to ${{ env.VERSION }}"
           git tag "${{ env.VERSION }}" -m "Release ${{ env.VERSION }}"
-
-          git push origin HEAD:${{ inputs.branch }}
           git push origin "${{ env.VERSION }}"
 
       # Always upload the merged staging dir so engineers can inspect or

@@ -2,13 +2,14 @@
 
 ## Overview
 
-[`publish-to-taas.yml`](publish-to-taas.yml) publishes our internal Netty fork to IBM TaaS Artifactory:
+[`publish-to-taas.yml`](publish-to-taas.yml) publishes our internal Netty fork to IBM TaaS Artifactory. The target repository depends on the mode:
 
-```
-https://na.artifactory.swg-devops.com/artifactory/datastax-team-dse-external-libs-maven-local
-```
+| Mode | Repository |
+|---|---|
+| `release` | `https://na.artifactory.swg-devops.com/artifactory/datastax-team-nosql-releases-maven-local` |
+| `snapshot` | `https://na.artifactory.swg-devops.com/artifactory/datastax-team-nosql-snapshots-maven-local` |
 
-This is the same repository that holds the internal ehcache libraries. No Jenkins macOS instances are needed — macOS builds use free GitHub-hosted runners (`macos-15` and `macos-15-intel`).
+No Jenkins macOS instances are needed — macOS builds use free GitHub-hosted runners (`macos-15` and `macos-15-intel`).
 
 ---
 
@@ -22,7 +23,7 @@ You (Actions tab → Run workflow)
 │  Stage 0 · validate  (ubuntu)                │
 │  • Checks TaaS credentials before building   │
 │  • Reads pom.xml version                     │
-│  • Computes version string (see below)        │
+│  • Computes version string (see below)       │
 │  • Outputs: version, deploy_url               │
 └──────────────┬───────────────────────────────┘
                │ (version passed to all stages)
@@ -45,7 +46,7 @@ You (Actions tab → Run workflow)
 │  • Merges into single staging directory      │
 │  • Builds netty-all (aggregation JAR) last   │
 │  • Deploys to TaaS Artifactory               │
-│  • Release only: git commit + tag push       │
+│  • Release only: git tag push       │
 └──────────────────────────────────────────────┘
 ```
 
@@ -71,115 +72,36 @@ Manual dispatch only (`workflow_dispatch`). To trigger:
 
 ## Version Scheme
 
-This section explains every version-related decision the pipeline makes, how pom.xml versions are interpreted, and what developers must and must not do.
+The version always comes from `pom.xml` — the pipeline never invents a version number.
 
----
+| Mode | Published version | Example (pom = `4.1.137.1.dse`) | Git tag |
+|---|---|---|---|
+| `release` | `<pom-version>` | `4.1.137.1.dse` | `4.1.137.1.dse` |
+| `snapshot` | `<pom-version>-SNAPSHOT` | `4.1.137.1.dse-SNAPSHOT` | none |
 
-### How upstream Netty versions the pom
+- **Release** is immutable. If `io/netty/netty-all/<version>` already exists in TaaS, Stage 0 fails with a clear message. To publish a new release, bump the version in `pom.xml` first (same as for the other forks), then run the workflow.
+- **Snapshot** is for testing in BDP before cutting a release. Re-running it overwrites the previous snapshot of the same pom version; TaaS keeps timestamped copies, and consumers resolve the latest.
+- The pipeline stamps the computed version into the poms **inside the build only** (`versions:set`). Nothing is committed back to the branch.
 
-The upstream Netty project uses the Maven Release Plugin, which produces a predictable version lifecycle. Confirmed from the git history in `riptano/netty`:
-
-```
-4.1.136.Final released
-    │
-    │  commit: [maven-release-plugin] prepare for next development iteration
-    ▼
-pom = 4.1.137.Final-SNAPSHOT    ← weeks of development commits
-    │
-    │  commit: [maven-release-plugin] prepare release netty-4.1.137.Final
-    ▼
-pom = 4.1.137.Final              ← git tag: netty-4.1.137.Final
-    │
-    │  DSE merge: merge tag into DSE fork branch
-    ▼
-pom = 4.1.137.Final              ← this is what our pipeline normally sees
-    │
-    │  (pipeline sets version automatically — see below)
-    ▼
-pom = 4.1.137.1.dse              ← after a release publish
-```
-
-### What pom.xml versions the pipeline accepts
+### Accepted pom versions
 
 | pom version | Accepted | Notes |
 |---|---|---|
-| `4.1.137.1.dse` | ✅ | Normal state after a DSE release publish |
-| `4.1.137.Final` | ✅ | Normal state right after DSE merge, before first publish |
-| `4.1.137.Final-SNAPSHOT` | ❌ **HARD FAIL** | Mid-development upstream commit — wrong branch |
+| `4.1.137.1.dse` | yes | Normal DSE version |
+| `4.1.137.Final` | yes | Upstream release tag |
+| `4.1.137.Final-SNAPSHOT` | **hard fail** | Upstream mid-development commit; would produce `-SNAPSHOT-SNAPSHOT` (or a SNAPSHOT published as a release) |
 
-If the pom version ends in `-SNAPSHOT`, the pipeline stops immediately in Stage 0 with this error:
+For the failing case, Stage 0 stops with:
 
 ```
-ERROR: pom version is '4.1.137.Final-SNAPSHOT' which ends in -SNAPSHOT.
-       This means the pipeline was triggered on an upstream mid-development
-       commit, not on a release tag or a DSE branch.
+ERROR: pom version is '4.1.137.Final-SNAPSHOT' which already ends in -SNAPSHOT.
        Trigger the pipeline on a branch whose pom.xml is at a final version
        (e.g. 4.1.137.Final or 4.1.137.1.dse).
 ```
 
-### Rule for developers: never manually change version numbers
+### SNAPSHOT file names
 
-**Do not run `mvn versions:set` or edit `<version>` in any pom.xml by hand.**
-
-The pipeline manages all version numbers automatically:
-- It reads the upstream triplet (`4.1.137`) from whatever version is in pom.xml
-- It computes the next DSE build counter by querying TaaS
-- It stamps the computed version into all pom.xml files during the build
-- For release: it commits the stamped pom.xml files back to the branch
-
-The only valid reason to have a specific DSE counter in pom.xml (e.g. `4.1.137.2.dse`) is because a previous release publish put it there.
-
----
-
-### Release version: `<upstream>.<N>.dse`
-
-The pipeline never reads the DSE build counter `N` from `pom.xml`. Instead:
-
-1. Extracts the upstream triplet from the pom (`4.1.137.1.dse` → `4.1.137`, `4.1.137.Final` → `4.1.137`)
-2. Queries TaaS Artifactory for all published `4.1.137.N.dse` version folders under `io/netty/netty-all/`
-3. Finds the highest `N` already published and uses `N+1` (defaults to `1` if nothing published yet)
-4. Stamps that version into all pom.xml files, builds, publishes to TaaS, commits pom.xml back, pushes a git tag
-
-| Scenario | pom.xml | Already in TaaS | Pipeline computes |
-|---|---|---|---|
-| First ever publish | `4.1.137.Final` or `4.1.137.1.dse` | nothing | `4.1.137.1.dse` |
-| Second publish of 4.1.137 | `4.1.137.1.dse` | `4.1.137.1.dse` | `4.1.137.2.dse` |
-| New upstream merged (4.1.138) | `4.1.138.Final` | nothing for 4.1.138 | `4.1.138.1.dse` |
-| Retry after partial failure | `4.1.137.1.dse` | 30 of 40 artifacts, no `netty-all` | `4.1.137.1.dse` (same — retries cleanly) |
-| Patching old upstream line | `4.1.137.2.dse` | `4.1.137.1.dse`, `4.1.137.2.dse` | `4.1.137.3.dse` |
-
-**Why `netty-all` is the counter anchor:** `netty-all` is always uploaded last by the deploy script. A partial publish that aborted before `netty-all` was uploaded leaves the counter unchanged, so a retry uses the same version rather than skipping to `N+2`.
-
-After a release publish the branch looks like:
-```
-git log:
-  a7f3c91  Set version to 4.1.137.2.dse    ← automated commit from pipeline
-  ...previous commits...
-
-git tag:
-  4.1.137.2.dse → a7f3c91                  ← automated tag from pipeline
-```
-
----
-
-### Snapshot version: `<upstream>-<sha>-SNAPSHOT`
-
-Snapshot mode is for developer testing — to build and publish a Netty artifact to TaaS so it can be consumed in BDP before committing to a full release.
-
-Format: `4.1.137-a3f5b2c-SNAPSHOT`
-
-- The short git SHA of the triggering commit is embedded in the version
-- The `-SNAPSHOT` suffix is at the end (Maven convention — resolvers treat this as a snapshot)
-- No version is stamped back to pom.xml
-- No git commit, no git tag
-
-| pom.xml | Commit SHA | Snapshot version published |
-|---|---|---|
-| `4.1.137.1.dse` | `a3f5b2c` | `4.1.137-a3f5b2c-SNAPSHOT` |
-| `4.1.137.1.dse` | `d9e1f0a` (new commit) | `4.1.137-d9e1f0a-SNAPSHOT` |
-| `4.1.138.Final` | `f1e2d3c` | `4.1.138-f1e2d3c-SNAPSHOT` |
-
-**Each commit produces a distinct snapshot.** They do not overwrite each other. A developer testing two different reworks can have both `4.1.137-a3f5b2c-SNAPSHOT` and `4.1.137-d9e1f0a-SNAPSHOT` in TaaS simultaneously and switch between them in BDP by changing `nettyVersion` in `build.properties`. Periodic cleanup of old snapshots may be needed over time.
+`mvn deploy` to a `file://` repository writes SNAPSHOTs with timestamped names, which a local `~/.m2` cannot resolve. Before building `netty-all`, Stage 5 runs [`snapshot_staging_normalize.sh`](../scripts/snapshot_staging_normalize.sh) to rename them to plain `-SNAPSHOT` names. It does nothing for release versions.
 
 ---
 
@@ -192,41 +114,33 @@ Both secrets are already set on `riptano/netty`. The values are in **1Password �
 | `TAAS_USERNAME` | `datastax-enterprise-automation@ibm.com` |
 | `TAAS_PASSWORD` | Identity token from 1Password |
 
-No SSH deploy key is needed. The release git push uses the workflow's built-in `GITHUB_TOKEN` with `contents: write` permission.
+No SSH deploy key is needed. The release git tag push uses the workflow's built-in `GITHUB_TOKEN` with `contents: write` permission.
 
 ---
 
 ## Consuming Published Artifacts
 
-Until the DataStax Artifactory → TaaS sync is configured (deferred — see DSP-25338), you can resolve the artifacts directly from TaaS by adding a repository to your BDP build using the `extraRepositoriesConfig` escape hatch:
+BDP resolves from the IBM virtual repo. In `~/.gradle/gradle.properties` (not in the BDP repo), point it at IBM Artifactory:
 
-**1. Create a file `taas-repo.gradle`:**
-```groovy
-repositories {
-    maven {
-        url = 'https://na.artifactory.swg-devops.com/artifactory/datastax-team-dse-external-libs-maven-local'
-        credentials {
-            username = System.getProperty('taasUsername')
-            password = System.getProperty('taasPassword')
-        }
-    }
-}
-```
-
-**2. Build BDP with:**
-```bash
-./gradlew <task> \
-  -DextraRepositoriesConfig=/path/to/taas-repo.gradle \
-  -DtaasUsername=datastax-enterprise-automation@ibm.com \
-  -DtaasPassword=<token>
-```
-
-**3. Update `build.properties`:**
 ```properties
-nettyVersion = 4.1.137.2.dse
+datastaxArtifactRepositoryUrls = https://na.artifactory.swg-devops.com/artifactory/datastax-team-nosql-dse-maven-virtual
+datastaxPluginRepositoryUrls = https://na.artifactory.swg-devops.com/artifactory/datastax-team-nosql-dse-maven-virtual
+datastaxRepositoryUsername = <TaaS username>
+datastaxRepositoryPassword = <TaaS identity token>
 ```
 
-Alternatively, download the `merged-local-staging` GitHub artifact from a completed run and point `extraRepositoriesConfig` at the local folder using `url = 'file:///path/to/merged-local-staging'`.
+Remove the legacy `datastaxArtifactRepositoryUrl` setting if present (see `BUILDING.md` in BDP).
+
+Then set the version in BDP's `build.properties`:
+
+```properties
+nettyVersion = 4.1.137.1.dse            # release
+# nettyVersion = 4.1.137.1.dse-SNAPSHOT  # snapshot, for testing
+```
+
+If a snapshot is re-published, run Gradle with `--refresh-dependencies` so it doesn't use a cached copy.
+
+Alternatively, download the `merged-local-staging` GitHub artifact from a completed run and add it to BDP with `-DextraRepositoriesConfig=<file>` containing `url = 'file:///path/to/merged-local-staging'`.
 
 ---
 
@@ -254,10 +168,12 @@ Stages 1–4 run in parallel.
 
 **Deploy step warns about a failed artifact:** The script tolerates individual failures so a duplicate upload doesn't abort the run. Check the warning message — if it is a network error rather than "already exists", re-run the workflow.
 
-**Re-running a release after a partial failure:** Re-trigger the workflow on the same branch. The version counter queries what netty-all is already in TaaS. Because `netty-all` is uploaded last, a partial run leaves the counter unchanged and the retry uses the same version number rather than skipping to the next one.
+**Re-running a release after a partial failure:** `deploy_maven_packages.sh` uploads artifacts in alphabetical order, so `netty-all` goes **first**. If a release run dies partway through the deploy, `netty-all/<version>` already exists and Stage 0 will refuse a re-run ("already published"). Either delete the partially uploaded `io/netty/*/<version>` folders in TaaS and re-run, or bump the pom version. Snapshot runs are not affected, because they can be re-run freely.
+
+**Stage 0 fails with "release ... is already published":** That version is in TaaS. Bump `pom.xml` or publish a snapshot.
 
 ---
 
 ## Deferred: DataStax Artifactory Sync
 
-Once publishing is working, a sync from `datastax-team-dse-external-libs-maven-local` into the DataStax public-facing repo needs to be configured — similar to how ehcache libraries are synced. Erik Merkle will help with this step. Until then, use the `extraRepositoriesConfig` approach above to consume the artifacts in BDP.
+Once publishing is working, the artifacts must be reachable from the DataStax public-facing repo. The release and snapshot repos above are used because they keep the artifacts accessible the way the old internal Artifactory did. How the existing sync is moved to IBM Artifactory is still being settled with Erik Merkle.
