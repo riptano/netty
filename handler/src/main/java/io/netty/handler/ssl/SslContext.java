@@ -808,7 +808,7 @@ public abstract class SslContext {
                                             toX509Certificates(keyCertChainFile), toPrivateKey(keyFile, keyPassword),
                                             keyPassword, keyManagerFactory, ciphers, cipherFilter,
                                             apn, null, sessionCacheSize, sessionTimeout, false,
-                                            null, KeyStore.getDefaultType(), null);
+                                            null, KeyStore.getDefaultType(), null, false, null);
         } catch (Exception e) {
             if (e instanceof SSLException) {
                 throw (SSLException) e;
@@ -825,11 +825,11 @@ public abstract class SslContext {
             Iterable<String> ciphers, CipherSuiteFilter cipherFilter, ApplicationProtocolConfig apn, String[] protocols,
             long sessionCacheSize, long sessionTimeout, boolean enableOcsp,
             SecureRandom secureRandom, String keyStoreType, String endpointIdentificationAlgorithm,
-            Map.Entry<SslContextOption<?>, Object>... options) throws SSLException {
+            boolean sanPeerIdentityLookup, Map.Entry<SslContextOption<?>, Object>... options) throws SSLException {
         return newClientContextInternal(provider, sslContextProvider, trustCert, trustManagerFactory, keyCertChain, key,
                 keyPassword, keyManagerFactory, ciphers, cipherFilter, apn, protocols, sessionCacheSize,
                 sessionTimeout, false, enableOcsp, secureRandom, keyStoreType, endpointIdentificationAlgorithm,
-                options);
+                sanPeerIdentityLookup, options);
     }
 
     static SslContext newClientContextInternal(
@@ -840,7 +840,7 @@ public abstract class SslContext {
             Iterable<String> ciphers, CipherSuiteFilter cipherFilter, ApplicationProtocolConfig apn, String[] protocols,
             long sessionCacheSize, long sessionTimeout, boolean startTls, boolean enableOcsp,
             SecureRandom secureRandom, String keyStoreType, String endpointIdentificationAlgorithm,
-            Map.Entry<SslContextOption<?>, Object>... options) throws SSLException {
+            boolean sanPeerIdentityLookup, Map.Entry<SslContextOption<?>, Object>... options) throws SSLException {
         if (provider == null) {
             provider = defaultClientProvider();
         }
@@ -856,7 +856,7 @@ public abstract class SslContext {
                         trustCert, trustManagerFactory, keyCertChain, key, keyPassword,
                         keyManagerFactory, ciphers, cipherFilter, apn, protocols, sessionCacheSize,
                         sessionTimeout, secureRandom, keyStoreType, endpointIdentificationAlgorithm,
-                        resumptionController);
+                        resumptionController, sanPeerIdentityLookup);
             case OPENSSL:
                 verifyNullSslContextProvider(provider, sslContextProvider);
                 OpenSsl.ensureAvailability();
