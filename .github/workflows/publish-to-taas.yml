@@ -140,6 +140,8 @@ jobs:
               set -euo pipefail
               ./mvnw -B clean install -DskipTests=true
               ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+              ./mvnw -B -N install -DskipTests=true
+              ./mvnw -B -pl bom install -DskipTests=true
               ./mvnw -B deploy \
                 -DaltDeploymentRepository=local-staging::default::file:///root/local-staging \
                 -DskipTests=true
@@ -210,6 +212,8 @@ jobs:
             -pl transport-native-unix-common,transport-native-epoll \
             -am
           ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+          ./mvnw -B -N install -DskipTests=true
+          ./mvnw -B -pl bom install -DskipTests=true
           ./mvnw -B \
             -pl transport-native-unix-common,transport-native-epoll \
             -am deploy \
@@ -281,6 +285,8 @@ jobs:
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
             -am
           ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+          ./mvnw -B -N install -DskipTests=true
+          ./mvnw -B -pl bom install -DskipTests=true
           ./mvnw -B -U \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
             deploy \
@@ -352,6 +358,8 @@ jobs:
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
             -am
           ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+          ./mvnw -B -N install -DskipTests=true
+          ./mvnw -B -pl bom install -DskipTests=true
           ./mvnw -B -Pmac-m1-cross-compile \
             -pl resolver-dns-native-macos,transport-native-unix-common,transport-native-kqueue \
             deploy \
