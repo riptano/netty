@@ -210,6 +210,7 @@ public final class SslContextBuilder {
     private SecureRandom secureRandom;
     private String keyStoreType = KeyStore.getDefaultType();
     private String endpointIdentificationAlgorithm;
+    private boolean sanPeerIdentityLookup;
     private final Map<SslContextOption<?>, Object> options = new HashMap<SslContextOption<?>, Object>();
 
     private SslContextBuilder(boolean forServer) {
@@ -220,9 +221,13 @@ public final class SslContextBuilder {
      * Configure a {@link SslContextOption}.
      */
     public <T> SslContextBuilder option(SslContextOption<T> option, T value) {
+        if (SanPeerIdentityConfig.SAN_PEER_IDENTITY_LOOKUP.equals(option)) {
+            sanPeerIdentityLookup = value != null && Boolean.TRUE.equals(value);
+        }
         if (value == null) {
             options.remove(option);
         } else {
+            option.validate(value);
             options.put(option, value);
         }
         return this;
@@ -634,6 +639,17 @@ public final class SslContextBuilder {
     }
 
     /**
+     * Enables SAN-driven peer identity lookup for client-side endpoint verification.
+     * <p>
+     * When enabled and hostname verification is configured, Netty inspects the peer certificate SAN entries and may
+     * preserve the original host or reverse-resolve an IP literal to a canonical hostname before delegating to the
+     * underlying trust manager.
+     */
+    public SslContextBuilder sanPeerIdentityLookup(boolean enabled) {
+        return option(SanPeerIdentityConfig.SAN_PEER_IDENTITY_LOOKUP, Boolean.valueOf(enabled));
+    }
+
+    /**
      * Create new {@code SslContext} instance with configured settings.
      * <p>If {@link #sslProvider(SslProvider)} is set to {@link SslProvider#OPENSSL_REFCNT} then the caller is
      * responsible for releasing this object, or else native memory may leak.
@@ -649,7 +665,7 @@ public final class SslContextBuilder {
                 trustManagerFactory, keyCertChain, key, keyPassword, keyManagerFactory,
                 ciphers, cipherFilter, apn, protocols, sessionCacheSize,
                     sessionTimeout, startTls, enableOcsp, secureRandom, keyStoreType, endpointIdentificationAlgorithm,
-                    toArray(options.entrySet(), EMPTY_ENTRIES));
+                    sanPeerIdentityLookup, toArray(options.entrySet(), EMPTY_ENTRIES));
         }
     }
 
