@@ -67,17 +67,21 @@ The workflow depends on these existing files:
 
 ### Secrets
 
-The workflow uses the built-in `GITHUB_TOKEN` secret, which is automatically provided by GitHub Actions. No additional secrets need to be configured.
+- `GITHUB_TOKEN`: built in, used for GitHub Packages. Nothing to configure.
+- `TAAS_USERNAME` and `TAAS_PASSWORD`: used only when publishing to IBM TaaS
+  Artifactory (see [Publishing to IBM TaaS Artifactory](#publishing-to-ibm-taas-artifactory)).
+  Both are already set on `riptano/netty`.
 
 ## Usage
 
 ### Manual Trigger
 
 1. Go to the **Actions** tab in your GitHub repository
-2. Select **Build and Publish to GitHub Packages** workflow
+2. Select **Build and Publish DataStax Netty to GitHub Packages and IBM TaaS** workflow
 3. Click **Run workflow**
 4. Select the branch to run from
-5. Click **Run workflow** button
+5. Tick **Also publish to IBM TaaS Artifactory** if you want the artifacts in TaaS too
+6. Click **Run workflow** button
 
 ### Tag-based Trigger
 
@@ -149,6 +153,56 @@ Add to your `~/.m2/settings.xml`:
   <version>YOUR_VERSION</version>
 </dependency>
 ```
+
+## Publishing to IBM TaaS Artifactory
+
+The same workflow can also publish the merged artifacts to IBM TaaS
+Artifactory (`https://na.artifactory.swg-devops.com/artifactory`). This is
+opt-in and only available on a manual run: tick **Also publish to IBM TaaS
+Artifactory**. Pushes and tags publish to GitHub Packages only.
+
+The version is used exactly as written in `pom.xml`; the workflow does not add,
+remove or check anything. The repository is chosen from that version:
+
+| Version in `pom.xml` | Target repository |
+|---|---|
+| ends in `-SNAPSHOT`, e.g. `4.1.137.2.dse-SNAPSHOT` | `datastax-team-nosql-snapshots-maven-local` |
+| anything else, e.g. `4.1.137.2.dse` | `datastax-team-nosql-releases-maven-local` |
+
+To publish a different version, change it in all poms first, e.g.
+`./mvnw versions:set -DnewVersion=<version> -DprocessAllModules=true -DgenerateBackupPoms=false`
+(`bom/pom.xml` has a standalone version, hence `-DprocessAllModules=true`),
+commit, then run the workflow.
+
+Credentials are the `TAAS_USERNAME` / `TAAS_PASSWORD` secrets. The values are in
+1Password → DSE-Shared → "IBM TaaS JFrog: datastax-enterprise-automation
+Identity Token". TaaS accepts the identity token only.
+
+Notes:
+- For `-SNAPSHOT` versions, `mvn deploy` to a `file://` repo writes timestamped
+  file names that a local `~/.m2` cannot resolve, which would break the
+  `netty-all` build. The workflow runs
+  [`snapshot_staging_normalize.sh`](../scripts/snapshot_staging_normalize.sh)
+  to rename them to plain `-SNAPSHOT`. It does nothing for release versions.
+- The workflow does not push a git tag. Tag the commit yourself after a release.
+- Nothing checks that a release version does not already exist. The deploy
+  script warns and continues on individual upload failures.
+
+### Consuming from BDP
+
+BDP resolves from the IBM virtual repo. In `~/.gradle/gradle.properties` (not in
+the BDP repo):
+
+```properties
+datastaxArtifactRepositoryUrls = https://na.artifactory.swg-devops.com/artifactory/datastax-team-nosql-dse-maven-virtual
+datastaxPluginRepositoryUrls = https://na.artifactory.swg-devops.com/artifactory/datastax-team-nosql-dse-maven-virtual
+datastaxRepositoryUsername = <TaaS username>
+datastaxRepositoryPassword = <TaaS identity token>
+```
+
+Remove the legacy `datastaxArtifactRepositoryUrl` setting if present. Then set
+`nettyVersion` in BDP's `build.properties` to the published version. If a
+snapshot is re-published, run Gradle with `--refresh-dependencies`.
 
 ## Manual Publishing to Internal Artifactory
 

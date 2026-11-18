@@ -1,8 +1,28 @@
-name: Build and Publish DataStax Netty to GitHub Packages
+name: Build and Publish DataStax Netty to GitHub Packages and IBM TaaS
+
+# ---------------------------------------------------------------------------
+# Always publishes to GitHub Packages. Publishing to IBM TaaS Artifactory is
+# opt-in and only available on a manual run (workflow_dispatch) with the
+# `publish_to_taas` input ticked. The version is used exactly as written in
+# pom.xml:
+#   <version> ends in -SNAPSHOT -> datastax-team-nosql-snapshots-maven-local
+#   anything else                -> datastax-team-nosql-releases-maven-local
+# To publish a different version, change it in pom.xml first.
+#
+# Required GitHub secrets: TAAS_USERNAME, TAAS_PASSWORD
+# (1Password -> DSE-Shared -> "IBM TaaS JFrog: datastax-enterprise-automation
+# Identity Token").
+# ---------------------------------------------------------------------------
 
 on:
   # Allows manual trigger from the Actions tab
   workflow_dispatch:
+    inputs:
+      publish_to_taas:
+        description: 'Also publish to IBM TaaS Artifactory (snapshots or releases repo, chosen from the pom version)'
+        required: false
+        type: boolean
+        default: false
 
   # Trigger on version tags
   push:
@@ -18,6 +38,9 @@ permissions:
 
 env:
   MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryhandler.count=5 -Dmaven.wagon.httpconnectionManager.ttlSeconds=240
+  TAAS_API_URL:        https://na.artifactory.swg-devops.com/artifactory
+  TAAS_RELEASES_REPO:  datastax-team-nosql-releases-maven-local
+  TAAS_SNAPSHOTS_REPO: datastax-team-nosql-snapshots-maven-local
 
 # Cancel running jobs when a new push happens to the same branch/tag
 concurrency:
@@ -280,7 +303,28 @@ jobs:
               "id": "central-portal-snapshots",
               "username": "${{ github.actor }}",
               "password": "${{ secrets.GITHUB_TOKEN }}"
+            },
+            {
+              "id": "taas",
+              "username": "${{ secrets.TAAS_USERNAME }}",
+              "password": "${{ secrets.TAAS_PASSWORD }}"
             }]
+
+      # The version comes straight from pom.xml. -SNAPSHOT selects the TaaS
+      # snapshots repo, anything else the releases repo.
+      - name: Read pom version and select TaaS repository
+        id: pom
+        run: |
+          set -euo pipefail
+          VERSION=$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout 2>/dev/null)
+          echo "pom version: $VERSION"
+          if [[ "$VERSION" == *-SNAPSHOT ]]; then
+            TAAS_REPO="${TAAS_SNAPSHOTS_REPO}"
+          else
+            TAAS_REPO="${TAAS_RELEASES_REPO}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "taas_url=${TAAS_API_URL}/${TAAS_REPO}" >> "$GITHUB_OUTPUT"
 
       # Setup environment variables
       - name: Prepare environment variables
@@ -312,6 +356,18 @@ jobs:
           name: macos-aarch64-local-staging
           path: ~/macos-aarch64-local-staging
 
+      # SNAPSHOT deploys to a file:// repo are written with timestamped names,
+      # which a local ~/.m2 cannot resolve (Maven would fall back to Sonatype
+      # and the netty-all build fails). Rename them to the plain -SNAPSHOT
+      # form. No-op for release versions.
+      - name: Normalize SNAPSHOT file names in staging directories
+        run: |
+          bash ./.github/scripts/snapshot_staging_normalize.sh \
+            ~/linux-x86_64-local-staging \
+            ~/linux-aarch64-local-staging \
+            ~/macos-x86_64-local-staging \
+            ~/macos-aarch64-local-staging
+
       # Install artifacts to local Maven repository
       - name: Copy build artifacts to local maven repository
         run: |
@@ -339,10 +395,11 @@ jobs:
             ~/macos-x86_64-local-staging \
             ~/macos-aarch64-local-staging
 
-            # Copy netty-all from local Maven repository
-            if [ -d "$HOME/.m2/repository/io/netty/netty-all" ]; then
-              cp -r $HOME/.m2/repository/io/netty/netty-all $HOME/local-staging/io/netty/
-            fi
+          # Copy netty-all of this version only. ~/.m2 is cache-restored and
+          # may hold netty-all from earlier runs that must not be re-uploaded.
+          mkdir -p "$HOME/local-staging/io/netty/netty-all"
+          cp -r "$HOME/.m2/repository/io/netty/netty-all/${{ steps.pom.outputs.version }}" \
+                "$HOME/local-staging/io/netty/netty-all/"
 
       # Deploy to GitHub Packages
       - name: Deploy to GitHub Packages
@@ -353,6 +410,16 @@ jobs:
             github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Deploy to IBM TaaS Artifactory (manual runs only, opt-in).
+      # The server id "taas" matches the settings.xml entry above.
+      - name: Deploy to IBM TaaS Artifactory
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_to_taas
+        run: |
+          bash ./.github/scripts/deploy_maven_packages.sh \
+            ~/local-staging \
+            ${{ steps.pom.outputs.taas_url }} \
+            taas
 
       - name: Upload merged staging directory (for debugging)
         uses: actions/upload-artifact@v4
