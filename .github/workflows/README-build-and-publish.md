@@ -80,7 +80,7 @@ The workflow depends on these existing files:
 2. Select **Build and Publish DataStax Netty to GitHub Packages and IBM TaaS** workflow
 3. Click **Run workflow**
 4. Select the branch to run from
-5. Tick **Also publish to IBM TaaS Artifactory** if you want the artifacts in TaaS too
+5. Set **taas_publish** to `snapshot` or `release` if you want the artifacts in TaaS too (default `none`)
 6. Click **Run workflow** button
 
 ### Tag-based Trigger
@@ -158,16 +158,21 @@ Add to your `~/.m2/settings.xml`:
 
 The same workflow can also publish the merged artifacts to IBM TaaS
 Artifactory (`https://na.artifactory.swg-devops.com/artifactory`). This is
-opt-in and only available on a manual run: tick **Also publish to IBM TaaS
-Artifactory**. Pushes and tags publish to GitHub Packages only.
+opt-in and only available on a manual run, through the `taas_publish` input.
+Pushes and tags publish to GitHub Packages only.
 
-The version is used exactly as written in `pom.xml`; the workflow does not add,
-remove or check anything. The repository is chosen from that version:
+The version comes from `pom.xml`, which never contains `-SNAPSHOT`. The
+`taas_publish` input decides what happens to it:
 
-| Version in `pom.xml` | Target repository |
-|---|---|
-| ends in `-SNAPSHOT`, e.g. `4.1.137.2.dse-SNAPSHOT` | `datastax-team-nosql-snapshots-maven-local` |
-| anything else, e.g. `4.1.137.2.dse` | `datastax-team-nosql-releases-maven-local` |
+| `taas_publish` | Version built and published | Target repository |
+|---|---|---|
+| `none` (default) | pom version, GitHub Packages only | none (TaaS skipped) |
+| `snapshot` | pom version + `-SNAPSHOT`, e.g. `4.1.137.2.dse-SNAPSHOT` | `datastax-team-nosql-snapshots-maven-local` |
+| `release` | pom version as is, e.g. `4.1.137.2.dse` | `datastax-team-nosql-releases-maven-local` |
+
+For `snapshot`, a first job (`Resolve version`) appends `-SNAPSHOT` and each build
+job applies it with `versions:set`, so nothing is committed to the branch. Note
+that a `snapshot` run also publishes the `-SNAPSHOT` version to GitHub Packages.
 
 To publish a different version, change it in all poms first, e.g.
 `./mvnw versions:set -DnewVersion=<version> -DprocessAllModules=true -DgenerateBackupPoms=false`
@@ -181,9 +186,9 @@ Identity Token". TaaS accepts the identity token only.
 Notes:
 - For `-SNAPSHOT` versions, `mvn deploy` to a `file://` repo writes timestamped
   file names that a local `~/.m2` cannot resolve, which would break the
-  `netty-all` build. The workflow runs
-  [`snapshot_staging_normalize.sh`](../scripts/snapshot_staging_normalize.sh)
-  to rename them to plain `-SNAPSHOT`. It does nothing for release versions.
+  `netty-all` build. The publish job has a step, `Normalize SNAPSHOT file names
+  in staging directories`, that renames them to plain `-SNAPSHOT`. It only runs
+  for `snapshot`.
 - The workflow does not push a git tag. Tag the commit yourself after a release.
 - Nothing checks that a release version does not already exist. The deploy
   script warns and continues on individual upload failures.
