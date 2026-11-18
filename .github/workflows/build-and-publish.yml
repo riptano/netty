@@ -1,8 +1,35 @@
-name: Build and Publish DataStax Netty to GitHub Packages
+name: Build and Publish DataStax Netty to GitHub Packages and IBM TaaS
+
+# ---------------------------------------------------------------------------
+# Always publishes to GitHub Packages. Publishing to IBM TaaS Artifactory is
+# opt-in and only available on a manual run (workflow_dispatch) through the
+# `taas_publish` input. The version comes from pom.xml (which never contains
+# -SNAPSHOT):
+#   taas_publish = none      nothing is changed, GitHub Packages only (default)
+#   taas_publish = snapshot  -SNAPSHOT is appended to the pom version
+#                            -> datastax-team-nosql-snapshots-maven-local
+#   taas_publish = release   the pom version is used as is
+#                            -> datastax-team-nosql-releases-maven-local
+# To publish a different version, change it in pom.xml first.
+#
+# Required GitHub secrets: TAAS_USERNAME, TAAS_PASSWORD
+# (1Password -> DSE-Shared -> "IBM TaaS JFrog: datastax-enterprise-automation
+# Identity Token").
+# ---------------------------------------------------------------------------
 
 on:
   # Allows manual trigger from the Actions tab
   workflow_dispatch:
+    inputs:
+      taas_publish:
+        description: 'Also publish to IBM TaaS Artifactory (snapshot appends -SNAPSHOT to the pom version)'
+        required: true
+        type: choice
+        options:
+          - none
+          - snapshot
+          - release
+        default: none
 
   # Trigger on version tags
   push:
@@ -18,6 +45,9 @@ permissions:
 
 env:
   MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryhandler.count=5 -Dmaven.wagon.httpconnectionManager.ttlSeconds=240
+  TAAS_API_URL:        https://na.artifactory.swg-devops.com/artifactory
+  TAAS_RELEASES_REPO:  datastax-team-nosql-releases-maven-local
+  TAAS_SNAPSHOTS_REPO: datastax-team-nosql-snapshots-maven-local
 
 # Cancel running jobs when a new push happens to the same branch/tag
 concurrency:
@@ -25,13 +55,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Stage 0: Work out the version to build and where to publish it.
+  # The pom version is used as is, except that taas_publish=snapshot appends
+  # -SNAPSHOT. Every build job below applies it with versions:set.
+  prepare:
+    runs-on: ubuntu-latest
+    name: Resolve version
+    outputs:
+      snapshot: ${{ steps.v.outputs.snapshot }}
+      version: ${{ steps.v.outputs.version }}
+      taas_url: ${{ steps.v.outputs.taas_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      - name: Read pom version
+        id: v
+        env:
+          TAAS_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.taas_publish || 'none' }}
+        run: |
+          set -euo pipefail
+          VERSION=$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout 2>/dev/null)
+          echo "pom version: $VERSION, taas_publish: $TAAS_PUBLISH"
+          SNAPSHOT=false
+          TAAS_REPO="${TAAS_RELEASES_REPO}"
+          if [ "$TAAS_PUBLISH" = "snapshot" ]; then
+            SNAPSHOT=true
+            VERSION="${VERSION}-SNAPSHOT"
+            TAAS_REPO="${TAAS_SNAPSHOTS_REPO}"
+          fi
+          echo "version to build: $VERSION"
+          echo "snapshot=$SNAPSHOT" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "taas_url=${TAAS_API_URL}/${TAAS_REPO}" >> "$GITHUB_OUTPUT"
+
   # Stage 1: Build full Netty library on Linux x64
   build-linux-x64:
     runs-on: ubuntu-latest
     name: Build Linux x86_64 (Full)
+    needs: [prepare]
 
     steps:
       - uses: actions/checkout@v4
+
+      # The build itself runs in Docker; this JDK is only for versions:set.
+      - name: Set up JDK 8 (SNAPSHOT version only)
+        if: needs.prepare.outputs.snapshot == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      - name: Set SNAPSHOT version
+        if: needs.prepare.outputs.snapshot == 'true'
+        run: ./mvnw -B versions:set -DnewVersion=${{ needs.prepare.outputs.version }} -DgenerateBackupPoms=false -DprocessAllModules=true
 
       # Cache .m2/repository
       - name: Cache local Maven repository
@@ -91,7 +174,7 @@ jobs:
   build-linux-aarch64:
     runs-on: ubuntu-24.04-arm
     name: Build Linux aarch64 (Native Libraries)
-    needs: [build-linux-x64]
+    needs: [prepare, build-linux-x64]
 
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +184,10 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '8'
+
+      - name: Set SNAPSHOT version
+        if: needs.prepare.outputs.snapshot == 'true'
+        run: ./mvnw -B versions:set -DnewVersion=${{ needs.prepare.outputs.version }} -DgenerateBackupPoms=false -DprocessAllModules=true
 
       # Cache .m2/repository
       - name: Cache local Maven repository
@@ -141,7 +228,7 @@ jobs:
   build-macos-intel:
     runs-on: macos-15-intel
     name: Build macOS x86_64 (Native Libraries)
-    needs: [build-linux-x64]
+    needs: [prepare, build-linux-x64]
 
     steps:
       - uses: actions/checkout@v4
@@ -151,6 +238,10 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '8'
+
+      - name: Set SNAPSHOT version
+        if: needs.prepare.outputs.snapshot == 'true'
+        run: ./mvnw -B versions:set -DnewVersion=${{ needs.prepare.outputs.version }} -DgenerateBackupPoms=false -DprocessAllModules=true
 
       # Cache .m2/repository
       - name: Cache local Maven repository
@@ -193,7 +284,7 @@ jobs:
   build-macos-arm:
     runs-on: macos-15
     name: Build macOS aarch64 (Native Libraries)
-    needs: [build-linux-x64]
+    needs: [prepare, build-linux-x64]
 
     steps:
       - uses: actions/checkout@v4
@@ -203,6 +294,10 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '8'
+
+      - name: Set SNAPSHOT version
+        if: needs.prepare.outputs.snapshot == 'true'
+        run: ./mvnw -B versions:set -DnewVersion=${{ needs.prepare.outputs.version }} -DgenerateBackupPoms=false -DprocessAllModules=true
 
       # Cache .m2/repository
       - name: Cache local Maven repository
@@ -240,11 +335,13 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
-  # Stage 5: Merge artifacts and publish to GitHub Packages
+  # Stage 5: Merge artifacts and publish to GitHub Packages (and optionally IBM TaaS)
   publish-to-github-packages:
     runs-on: ubuntu-latest
     name: Merge and Publish to GitHub Packages
-    needs: [build-linux-x64, build-linux-aarch64, build-macos-intel, build-macos-arm]
+    needs: [prepare, build-linux-x64, build-linux-aarch64, build-macos-intel, build-macos-arm]
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -280,6 +377,11 @@ jobs:
               "id": "central-portal-snapshots",
               "username": "${{ github.actor }}",
               "password": "${{ secrets.GITHUB_TOKEN }}"
+            },
+            {
+              "id": "taas",
+              "username": "${{ secrets.TAAS_USERNAME }}",
+              "password": "${{ secrets.TAAS_PASSWORD }}"
             }]
 
       # Setup environment variables
@@ -312,6 +414,28 @@ jobs:
           name: macos-aarch64-local-staging
           path: ~/macos-aarch64-local-staging
 
+      # SNAPSHOT deploys to a file:// repo are written with timestamped names
+      # (netty-buffer-<v>-20261118.095400-1.jar), which a local ~/.m2 cannot
+      # resolve: Maven would fall back to the repos in netty's pom and the
+      # netty-all build fails. Rename them to the plain -SNAPSHOT form and drop
+      # the generated metadata/checksums. Only runs for a SNAPSHOT build.
+      - name: Normalize SNAPSHOT file names in staging directories
+        if: needs.prepare.outputs.snapshot == 'true'
+        run: |
+          for root in ~/linux-x86_64-local-staging ~/linux-aarch64-local-staging \
+                      ~/macos-x86_64-local-staging ~/macos-aarch64-local-staging; do
+            find "$root" -type d -name '*-SNAPSHOT' | while read -r dir; do
+              base="$(basename "$dir")"          # e.g. 4.1.137.2.dse-SNAPSHOT
+              ver="${base%-SNAPSHOT}"            # e.g. 4.1.137.2.dse
+              rm -f "$dir"/maven-metadata.xml* "$dir"/*.md5 "$dir"/*.sha1
+              find "$dir" -maxdepth 1 -type f | while read -r f; do
+                name="$(basename "$f")"
+                new="$(echo "$name" | sed -E "s/-${ver//./\\.}-[0-9]{8}\.[0-9]{6}-[0-9]+/-${base}/")"
+                [ "$new" = "$name" ] || mv -f "$f" "$dir/$new"
+              done
+            done
+          done
+
       # Install artifacts to local Maven repository
       - name: Copy build artifacts to local maven repository
         run: |
@@ -323,6 +447,10 @@ jobs:
             ~/macos-aarch64-local-staging
 
       # Generate netty-all and install to local Maven repository
+      - name: Set SNAPSHOT version
+        if: needs.prepare.outputs.snapshot == 'true'
+        run: ./mvnw -B versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false -DprocessAllModules=true
+
       - name: Generate netty-all
         run: |
           ./mvnw -B --file pom.xml -pl all \
@@ -339,10 +467,11 @@ jobs:
             ~/macos-x86_64-local-staging \
             ~/macos-aarch64-local-staging
 
-            # Copy netty-all from local Maven repository
-            if [ -d "$HOME/.m2/repository/io/netty/netty-all" ]; then
-              cp -r $HOME/.m2/repository/io/netty/netty-all $HOME/local-staging/io/netty/
-            fi
+          # Copy netty-all of this version only. ~/.m2 is cache-restored and
+          # may hold netty-all from earlier runs that must not be re-uploaded.
+          mkdir -p "$HOME/local-staging/io/netty/netty-all"
+          cp -r "$HOME/.m2/repository/io/netty/netty-all/${{ env.VERSION }}" \
+                "$HOME/local-staging/io/netty/netty-all/"
 
       # Deploy to GitHub Packages
       - name: Deploy to GitHub Packages
@@ -353,6 +482,16 @@ jobs:
             github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Deploy to IBM TaaS Artifactory (manual runs only, opt-in).
+      # The server id "taas" matches the settings.xml entry above.
+      - name: Deploy to IBM TaaS Artifactory
+        if: github.event_name == 'workflow_dispatch' && inputs.taas_publish != 'none'
+        run: |
+          bash ./.github/scripts/deploy_maven_packages.sh \
+            ~/local-staging \
+            ${{ needs.prepare.outputs.taas_url }} \
+            taas
 
       - name: Upload merged staging directory (for debugging)
         uses: actions/upload-artifact@v4
